@@ -7,10 +7,8 @@ venv/
 env/
 *.egg-info/
 
-# Synthea
-synthea/output/
-synthea/build/
-synthea/.gradle/
+# Synthea (entire cloned repo - we don't commit MITRE's source code)
+synthea/
 
 # DuckDB
 *.duckdb
