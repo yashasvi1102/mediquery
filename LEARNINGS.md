@@ -32,3 +32,16 @@ A running log of decisions, mistakes, and surprises during this 6-week build.
 - Marital status codes: M=Married, S=Single, D=Divorced, W=Widowed, U=Unknown.
 - Regenerating Synthea overwrites synthea/output/fhir/. Note bundle 
   filenames before regenerating.
+  ## Day 4 - Batch Parsing at Scale
+
+- Scaled fhir_parser.py from 1 bundle to 11,446 with zero failures.
+- Synthea-Massachusetts generates dense per-patient histories: 
+  ~58 encounters, ~36 conditions, ~50 medication requests per patient.
+  Total row counts: encounters 669K, conditions 415K, medications 575K.
+- These numbers will inflate Bronze table sizes — Silver layer filters 
+  (especially Condition non-disease findings) become important for Day 16+ work.
+- Wrote intermediate parquet output (data_generation/parsed/) for Day 6 
+  to load into DuckDB. Avoids re-parsing the FHIR JSON twice.
+- Parquet files are 50-200MB total — gitignored, not in version control.
+- PowerShell ">> .gitignore" can write UTF-16 BOM that git can't parse. 
+  Use Set-Content with -Encoding utf8 to be safe.
