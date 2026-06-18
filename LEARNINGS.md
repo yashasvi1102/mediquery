@@ -45,3 +45,17 @@ A running log of decisions, mistakes, and surprises during this 6-week build.
 - Parquet files are 50-200MB total — gitignored, not in version control.
 - PowerShell ">> .gitignore" can write UTF-16 BOM that git can't parse. 
   Use Set-Content with -Encoding utf8 to be safe.
+  ## Day 5 - DuckDB Bronze Schema
+
+- Created mediquery.duckdb at project root with bronze/silver/gold schemas.
+- 4 empty Bronze tables: bronze_patients, bronze_encounters, bronze_conditions,
+  bronze_medication_requests. Total 54 columns including audit columns.
+- Medallion principle applied: Bronze has NO primary key or unique constraints.
+  Raw, append-only, history preserved. Dedup happens in Silver.
+- Audit columns on every Bronze table: load_timestamp (default CURRENT_TIMESTAMP)
+  and load_batch_id (string identifier per load run). Lets us trace which
+  pipeline run produced each row.
+- bronze_observations deferred to Day 11 (no parser yet, no point in empty table).
+- connection.py wraps duckdb.connect() so DB path is centralized — every
+  future loader/script imports get_connection() instead of hardcoding paths.
+- DuckDB v1.5.3, 0.27 MB empty. Will grow to ~200-500 MB after Day 6 load.
