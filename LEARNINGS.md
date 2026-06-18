@@ -16,4 +16,19 @@ A running log of decisions, mistakes, and surprises during this 6-week build.
 - One Synthea patient = 500-1200 entries across ~19 resource types. Way more data per patient than expected.
 - Bryan958 had more Procedures (176) than Observations (103), which is unusual - most patients have many more vitals/labs than procedures.
 - Of 19 resource types Synthea emits, only 6 matter for this project: Patient, Encounter, Condition, MedicationRequest, Observation, Procedure. The other 13 are billing/admin noise.
+## Day 3 - FHIR Parser
 
+- Built extractors for Patient, Encounter, Condition, MedicationRequest.
+- FHIR references come in 3 formats: urn:uuid:<id>, ResourceType/<id>, 
+  and conditional ResourceType?identifier=<system>|<value>. Parser handles all.
+- Provider/Organization refs use the conditional format because they live 
+  in separate hospitalInformation/practitionerInformation bundles.
+- CONFIRMED: Synthea Conditions emit SNOMED codes ONLY, not ICD-10. 
+  The original Day 10 plan needs adjustment — either stay SNOMED-native 
+  or build a SNOMED-to-ICD-10 lookup. Decide on Day 9.
+- Synthea Conditions include non-clinical entries like "Medication review 
+  due (situation)" and "Received higher education (finding)". Bronze keeps 
+  everything; Silver layer must filter these before Day 16's chronic-condition work.
+- Marital status codes: M=Married, S=Single, D=Divorced, W=Widowed, U=Unknown.
+- Regenerating Synthea overwrites synthea/output/fhir/. Note bundle 
+  filenames before regenerating.
