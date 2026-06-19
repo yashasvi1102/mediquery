@@ -59,3 +59,17 @@ A running log of decisions, mistakes, and surprises during this 6-week build.
 - connection.py wraps duckdb.connect() so DB path is centralized — every
   future loader/script imports get_connection() instead of hardcoding paths.
 - DuckDB v1.5.3, 0.27 MB empty. Will grow to ~200-500 MB after Day 6 load.
+## Day 6 - Bronze Layer Load
+
+- Loaded 1.67M rows into Bronze in 5.29 seconds using DuckDB's read_parquet().
+  Row counts: patients 11,446 | encounters 669,189 | conditions 414,851 |
+  medications 574,828. All self-verified (source parquet count == inserted count).
+- DuckDB native parquet read is ~100x faster than Python row inserts would
+  have been. ETL pattern: write parquet intermediate, load via SQL, not loops.
+- DB file is 88.76 MB for 1.67M rows. Better compression than parquet because
+  DuckDB stores per-column dictionaries.
+- Gender split sanity-checked: 5,669 F / 5,777 M, sums to 11,446 — no nulls.
+- TRUNCATE+INSERT chosen as default for dev iteration. --append flag available
+  for true Medallion semantics (preserves load history via load_batch_id).
+- PowerShell parses asterisks and parens in -c "..." Python strings before
+  Python sees them. Use here-strings (@"..."@ | python) or a .py file.
