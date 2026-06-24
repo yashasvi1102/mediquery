@@ -73,3 +73,49 @@ A running log of decisions, mistakes, and surprises during this 6-week build.
   for true Medallion semantics (preserves load history via load_batch_id).
 - PowerShell parses asterisks and parens in -c "..." Python strings before
   Python sees them. Use here-strings (@"..."@ | python) or a .py file.
+  ## Day 7 — Week 1 Close & Differentiator Decision
+
+- Top-10 conditions query revealed 7 of 10 most common "conditions" are not
+  clinical disorders — they're social factors (stress, social isolation),
+  administrative events (medication review due), or employment status.
+  Synthea encodes SDOH and admin findings in the same table as real diseases.
+- This is correct FHIR behavior, not a bug. The Condition resource is designed
+  to capture anything clinically relevant including social determinants. But
+  it means naive "patients with conditions" queries inflate cohorts.
+- Decision: Silver Conditions (Day 10) will add three classification columns —
+  clinical_category (disorder/finding/situation), clinical_subcategory (disease
+  system if disorder, SDOH domain if finding), is_billable_diagnosis (boolean).
+- This becomes the project's main differentiator. Most Synthea tutorials skip
+  this filtering. Documented in docs/design_decisions.md (DD-001) so the
+  decision survives context switches.
+- SNOMED 224299000 ("Received higher education") confirmed present at 5,382
+  rows — used initially as the LinkedIn post hook before realizing the
+  top-10 distribution was a stronger story.
+- README rewritten to lead with the SNOMED differentiator and the actual data
+  table, not generic project description. The "what's interesting" section
+  comes before the stack list.
+  ## Day 8 — dbt Installation
+
+- Installed dbt-duckdb 1.10.1 alongside dbt-core 1.11.11. Plugin attached cleanly,
+  no version conflicts with existing project dependencies.
+- dbt project lives at data_engineering/dbt/ — kept inside the existing data
+  engineering folder rather than as a sibling at repo root. Keeps related
+  warehouse work in one place.
+- profiles.yml committed to the repo. Normally profiles.yml stays out of git
+  because it contains credentials, but the DuckDB target has only a local file
+  path — no secrets. Anyone cloning can run dbt debug immediately. If a cloud
+  target gets added later, credentials move to env vars.
+- DBT_PROFILES_DIR set to the project dbt folder, not ~/.dbt/. Project stays
+  portable — no machine-specific config in user home directory.
+- Materialization strategy: silver and gold both build as physical tables, not
+  views. Views re-execute on every query — wasteful for analytics. Tables cost
+  storage but stay fast.
+- Empty model folders (models/silver/, models/gold/) need .gitkeep placeholder
+  files or git won't track them. Almost shipped without these — would have
+  broken Day 9 for anyone cloning the repo.
+- dbt debug passed on first try after profiles.yml was created. No SQL written
+  yet — that's Day 9.
+- YAML is whitespace-sensitive. dbt_project.yml and profiles.yml both use exactly
+  2-space indentation. Tabs anywhere would break it.
+- Forward slashes in DuckDB path inside profiles.yml — YAML treats backslashes
+  as escape characters even on Windows.
