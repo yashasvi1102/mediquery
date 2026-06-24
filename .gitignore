@@ -41,3 +41,8 @@ data_generation/parse_errors.log
 
 git check-ignore -v data_generation/parse_errors.log
 git status
+# dbt
+data_engineering/dbt/target/
+data_engineering/dbt/dbt_packages/
+data_engineering/dbt/logs/
+data_engineering/dbt/.user.yml

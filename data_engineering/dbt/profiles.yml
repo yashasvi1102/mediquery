@@ -1,0 +1,10 @@
+mediquery:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "D:/Projects/mediquery/mediquery.duckdb"
+      threads: 4
+      extensions:
+        - httpfs
+        - parquet
