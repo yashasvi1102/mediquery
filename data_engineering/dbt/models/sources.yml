@@ -1,0 +1,11 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: "Raw FHIR data loaded from Synthea parquet exports"
+    schema: bronze
+    tables:
+      - name: bronze_patients
+      - name: bronze_encounters
+      - name: bronze_conditions
+      - name: bronze_medication_requests
