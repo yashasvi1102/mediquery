@@ -192,3 +192,57 @@ A running log of decisions, mistakes, and surprises during this 6-week build.
   the first's clinical_category column.
 
 - 67% non-disease finding is the LinkedIn post for Day 14 weekly close.
+
+## Day 11 — silver_medications + parser fix (medicationReference fallback)
+
+- BUG FOUND BEFORE WRITING MODEL: 202,708 of 574,828 medication rows (35%)
+  had NULL medication_display in Bronze. Discovered when running schema check
+  before writing silver_medications. Would have silently corrupted Day 17
+  adherence, Day 19 anomaly framework, and Day 25 Neo4j PRESCRIBED edges.
+
+- ROOT CAUSE: FHIR allows two ways to attach a drug to a MedicationRequest:
+  inline (medicationCodeableConcept) or by reference (medicationReference
+  pointing to a Medication resource in the same bundle). Day 3 parser only
+  handled the inline form. Synthea uses both; the reference form returned NULL.
+
+- FIX: Added build_medication_lookup() to fhir_parser. Two-pass parsing per
+  bundle: first scan extracts a {uuid -> coding} dict from contained
+  Medication resources; second pass resolves medicationReference fallbacks
+  when medicationCodeableConcept is absent.
+
+- DESIGN CHOICE: Quick fix (special-case MedicationRequest in parse_bundle)
+  over clean refactor (every extractor accepts a context dict). Rule used:
+  don't generalize until the second instance exists. If Day 13 observations
+  parser needs the same pattern, refactor then.
+
+- VERIFIED: re-ran parser on all 11,446 bundles. 574,828 rows. 0 NULL displays,
+  0 NULL code_systems. Investigation scripts (find_broken.py, inspect_med.py,
+  verify_med_resource.py, smoke_test_parser.py) kept in repo — they document
+  the diagnostic process.
+
+- silver_medications: dedup by medication_request_id on load_timestamp.
+  Two classification columns:
+    - medication_flag (Day 17 cohort: diabetes_drug, antihypertensive,
+      heart_failure_drug, copd_drug; NULL for unrelated drugs)
+    - drug_class (15 therapeutic categories: biguanide, insulin,
+      ace_inhibitor, statin, opioid, etc.)
+  Same pattern as silver_conditions: narrow flag for downstream cohorts,
+  broad class for analytics.
+
+- INSULIN DECISION: first pass excluded insulin from diabetes_drug flag.
+  Cross-check showed only 494 of 1,731 T2DM patients (28%) on a diabetes
+  drug — far below real-world ~70-80%. Insulin is Synthea's #2 medication
+  overall (50K rows) and is prescribed alongside or instead of metformin
+  for T2DM. Added insulin to diabetes_drug: rate jumped to 67.5% (1,168/1,731).
+  The remaining 32.5% are likely diabetic complications coded without parent
+  T2DM diagnosis — Day 17 caveat.
+
+- HTN treatment rate is 100% in Synthea (every hypertensive gets a drug).
+  Real world is ~75%. Synthea-specific; document for Day 17.
+
+- Status field: only 'active' (30K) and 'completed' (544K) appear.
+  No stopped/cancelled/on-hold/error. Simpler than real EHRs.
+
+- DEFERRED: bronze_observations + observation parser moved to Day 12.
+  Day 11 absorbed the 1-2 hour parser fix; observations was the right
+  thing to push.

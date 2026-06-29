@@ -159,11 +159,46 @@ def extract_condition(c: dict) -> dict:
         "abatement_date": c.get("abatementDateTime"),
         "recorded_date": c.get("recordedDate"),
     }
+def build_medication_lookup(bundle: dict) -> dict[str, dict]:
+    """
+    Scan bundle for Medication resources and return id -> coding dict.
 
+    Synthea writes some MedicationRequests with medicationReference instead
+    of medicationCodeableConcept; the referenced Medication resource lives
+    in the same bundle. Without this lookup, ~35% of medications parse as NULL.
+    Keyed on bare UUID (matching _normalize_ref output) so the MedicationRequest
+    extractor can look up the resolved reference directly.
+    """
+    lookup: dict[str, dict] = {}
+    for med in iter_resources(bundle, "Medication"):
+        coding = _safe_get(med, "code", "coding", 0) or {}
+        med_id = med.get("id")
+        if med_id:
+            lookup[med_id] = {
+                "system": coding.get("system"),
+                "code": coding.get("code"),
+                "display": coding.get("display"),
+            }
+    return lookup
 
-def extract_medication_request(m: dict) -> dict:
-    """Flatten a MedicationRequest resource (RxNorm-coded in Synthea)."""
+def extract_medication_request(m: dict, med_lookup: dict[str, dict] | None = None) -> dict:
+    """
+    Flatten a MedicationRequest resource (RxNorm-coded in Synthea).
+
+    Synthea uses two forms:
+      1. medicationCodeableConcept - inline drug code (preferred path)
+      2. medicationReference        - points to a Medication resource in the
+                                      same bundle; resolved via med_lookup.
+    """
+    # Primary: inline coding
     med_coding = _safe_get(m, "medicationCodeableConcept", "coding", 0) or {}
+
+    # Fallback: reference to a Medication resource elsewhere in the bundle
+    if not med_coding.get("code") and med_lookup:
+        ref_id = _normalize_ref(_safe_get(m, "medicationReference", "reference"))
+        if ref_id and ref_id in med_lookup:
+            med_coding = med_lookup[ref_id]
+
     dosage = _safe_get(m, "dosageInstruction", 0) or {}
     return {
         "medication_request_id": m.get("id"),
@@ -178,7 +213,6 @@ def extract_medication_request(m: dict) -> dict:
         "dosage_text": dosage.get("text"),
     }
 
-
 # ---------- bundle-level convenience ----------
 
 RESOURCE_EXTRACTORS = {
@@ -192,9 +226,17 @@ RESOURCE_EXTRACTORS = {
 def parse_bundle(bundle: dict) -> dict[str, list[dict]]:
     """Parse one Synthea bundle into typed lists of flat dicts."""
     out: dict[str, list[dict]] = {key: [] for key, _ in RESOURCE_EXTRACTORS.values()}
+
+    # MedicationRequest needs a lookup of contained Medication resources
+    # to resolve medicationReference fallbacks. Build once per bundle.
+    med_lookup = build_medication_lookup(bundle)
+
     for resource_type, (key, extractor) in RESOURCE_EXTRACTORS.items():
         for resource in iter_resources(bundle, resource_type):
-            out[key].append(extractor(resource))
+            if resource_type == "MedicationRequest":
+                out[key].append(extractor(resource, med_lookup))
+            else:
+                out[key].append(extractor(resource))
     return out
 
 
