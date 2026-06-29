@@ -119,3 +119,76 @@ A running log of decisions, mistakes, and surprises during this 6-week build.
   2-space indentation. Tabs anywhere would break it.
 - Forward slashes in DuckDB path inside profiles.yml — YAML treats backslashes
   as escape characters even on Windows.
+  ## Day 9 — silver_patients
+
+- silver_patients built from bronze_patients with row_number() dedup on
+  load_timestamp. Same count as Bronze (11,446) — no duplicates from
+  current load, but dedup logic is in place for future re-ingests.
+- Kept FHIR-native gender values (male/female) instead of mapping to M/F.
+  Single-letter codes would have lost FHIR alignment for no real benefit.
+- Stored birth_date as source of truth + age_years_current and age_at_death
+  as derived helpers. Gold layer will compute age-at-encounter against
+  birth_date for accuracy; current_age helper is for fast cohort filters.
+- age_years_current is technically non-deterministic (changes daily). Acceptable
+  trade-off — documented in column comments. Real age math happens in Gold.
+- Address fields were already split in Bronze (city/state/postal_code/country).
+  Day 9 plan said "parse address" — that work was done correctly in the FHIR
+  parser on Day 3. Don't re-solve solved problems.
+- GOTCHA: dbt-duckdb prefixes custom schemas with target.schema by default,
+  so +schema: silver in dbt_project.yml created main_silver, not silver.
+  Fixed with a generate_schema_name macro override that uses the custom
+  schema name as-is. Standard dbt pattern when you don't want the prefix.
+- Sources declared in models/sources.yml so silver_patients references
+  {{ source('bronze', 'bronze_patients') }} instead of hardcoding the table.
+  This wires up dbt lineage — `dbt docs generate` will show Bronze → Silver
+  dependencies on Day 13.
+- Sanity check: 11,446 unique patients | 5,669 F / 5,777 M | 1,446 deceased
+  (12.6%) | all 4 age buckets populated. Distribution matches Synthea-MA
+  defaults from Day 6.
+  ## Day 10 — silver_encounters + silver_conditions (DD-001 implemented)
+
+- silver_encounters: 669,189 rows, all deduped by encounter_id on load_timestamp.
+  FHIR class codes mapped to readable types (AMB->ambulatory, EMER->emergency,
+  IMP->inpatient, HH->home_health, VR->virtual). class_display is always NULL
+  in Synthea — only the code is emitted, so the mapping is mandatory.
+- is_inpatient boolean added for Day 15 readmission logic. 12,223 inpatient
+  encounters matches Bronze class_code distribution exactly.
+- length_of_stay_days computed in Silver, not Gold. Used by readmissions
+  AND length-of-stay analytics; better to compute once.
+
+- silver_conditions: DD-001 implemented. 414,851 conditions classified:
+    - 135,775 disorder (33%)
+    - 188,477 finding (45%)
+    - 89,994 situation (22%)
+    - 605 unknown (0.15%)
+  This is the headline number: 67% of "conditions" in raw FHIR are NOT diseases.
+  Naive cohort queries would inflate by 3x without this filter.
+
+- Classification done via SNOMED suffix regex on the display string. Worked
+  for 99.2% of rows on first pass. Top unknowns were sprains and burns
+  (morphologic abnormality) and refugees (person) — added these as suffixes
+  with mappings: morphologic abnormality -> disorder, person -> finding.
+  Brought unknown from 3,206 to 605. Remaining unknowns are SNOMED codes
+  with no parenthetical at all (joint pain, opioid abuse, gout) — fundamental
+  SNOMED inconsistency, can't fix.
+
+- condition_flag column centralizes SNOMED code lists for the 4 chronic
+  conditions: diabetes_t2 (1,731 patients, 4,189 rows), hypertension (2,665),
+  heart_failure (321), copd (164). Gold models filter by flag, not by
+  hardcoded codes. If Day 16 chronic-condition cohort needs to add a
+  condition, one place to update.
+
+- Diabetes T2 includes complications (retinopathy, neuropathy, kidney disease,
+  proteinuria) under the diabetes_t2 flag. Patient counts: 4,189 rows /
+  1,731 patients = 2.4 conditions per diabetic. Without complications,
+  Day 16 cohort would have undercounted.
+
+- GOTCHA: is_billable_diagnosis originally referenced display ilike '%(disorder)%'
+  directly. After adding morphologic abnormality -> disorder mapping in
+  clinical_category, the two columns disagreed by 2,091 rows. Lesson: when
+  a derived column has logic that another column depends on, the dependent
+  column must reference the same source. Fixed by mirroring the OR condition.
+  In a cleaner build this would be a 2-stage CTE with the second referencing
+  the first's clinical_category column.
+
+- 67% non-disease finding is the LinkedIn post for Day 14 weekly close.
