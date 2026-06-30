@@ -313,3 +313,20 @@ link diagnoses to vital signs in a clinically realistic way -- which
 means the original medication adherence story using clinical outcomes
 wouldn't work, so I pivoted to prescription-pattern adherence (proportion
 of days covered) which is the industry-standard approach anyway."
+## Day 13 - dbt schema docs + Python validation suite
+
+- 33 dbt tests across 5 silver models (unique, not_null, accepted_values,
+  relationships). All FK tests against silver_patients pass — no orphan
+  patient_ids in any child table. De-risks Week 4 Neo4j ingestion.
+- Generic test arguments now nest under `arguments:` per dbt 1.11 deprecation.
+  Took 3 iterations to catch them all because deprecation summary doesn't
+  list every file unless --show-all-deprecations is passed.
+- tests/validate_silver.py encodes the DD-001 and DD-002 quantitative claims
+  as Python assertions. dbt tests catch schema bugs (a value outside the
+  enum, a NULL where there shouldn't be one). They cannot catch
+  distribution drift (33% disorder share, 49% HbA1c implausibility,
+  67% T2DM treatment rate). The Python suite is the layer that does.
+- Source-of-truth principle: every number in LEARNINGS.md should be
+  reproducible from the data. If I claim 49% HbA1c implausibility, the
+  validation script proves it. Anti-pattern: documenting numbers no test
+  enforces — they go stale silently.
