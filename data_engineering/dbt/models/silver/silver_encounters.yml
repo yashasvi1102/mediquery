@@ -1,0 +1,32 @@
+version: 2
+
+models:
+  - name: silver_encounters
+    description: |
+      Deduplicated FHIR Encounter resources. FHIR class codes mapped to readable
+      encounter_type (AMB -> ambulatory, EMER -> emergency, IMP -> inpatient,
+      HH -> home_health, VR -> virtual). length_of_stay_days computed here for
+      reuse by Day 15 readmissions and length-of-stay analytics.
+    columns:
+      - name: encounter_id
+        tests:
+          - unique
+          - not_null
+      - name: patient_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_patients')
+                field: patient_id
+      - name: encounter_type
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['ambulatory', 'emergency', 'inpatient', 'home_health', 'virtual']
+      - name: is_inpatient
+        description: Boolean used by Day 15 readmission window logic.
+        tests:
+          - not_null
+      - name: length_of_stay_days
+        description: Computed in silver; null for non-inpatient encounters.

@@ -1,0 +1,30 @@
+version: 2
+
+models:
+  - name: silver_patients
+    description: |
+      Deduplicated patient records from bronze_patients. One row per patient_id,
+      keeping the latest by load_timestamp. FHIR-native gender values preserved.
+    columns:
+      - name: patient_id
+        description: FHIR Patient.id (UUID).
+        tests:
+          - unique
+          - not_null
+      - name: gender
+        description: FHIR-native values, not mapped to single letters.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['male', 'female', 'other', 'unknown']
+      - name: birth_date
+        description: Source of truth for age math. Use this in Gold, not age_years_current.
+        tests:
+          - not_null
+      - name: age_years_current
+        description: |
+          Non-deterministic helper for fast cohort filters. Recomputes daily.
+          Do not use for analytics requiring stable age — compute against birth_date.
+      - name: is_deceased
+        tests:
+          - not_null

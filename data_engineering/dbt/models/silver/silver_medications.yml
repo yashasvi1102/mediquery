@@ -1,0 +1,42 @@
+version: 2
+
+models:
+  - name: silver_medications
+    description: |
+      Deduplicated FHIR MedicationRequest resources. Parser handles both inline
+      (medicationCodeableConcept) and reference (medicationReference) forms — see
+      Day 11 LEARNINGS. Insulin is included in diabetes_drug flag (DD on Day 11)
+      because excluding it dropped T2DM treatment rate from 67.5% to 28%.
+    columns:
+      - name: medication_request_id
+        tests:
+          - unique
+          - not_null
+      - name: patient_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_patients')
+                field: patient_id
+      - name: medication_display
+        description: Never NULL post Day-11 parser fix.
+        tests:
+          - not_null
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['active', 'completed']
+      - name: medication_flag
+        description: |
+          Cohort flag for Day 17 adherence work. NULL means drug is not in a
+          tracked therapeutic cohort.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['diabetes_drug', 'antihypertensive', 'heart_failure_drug', 'copd_drug']
+              config:
+                where: "medication_flag is not null"
+      - name: drug_class
+        description: 15-category therapeutic classification (biguanide, insulin, ace_inhibitor, statin, etc.).

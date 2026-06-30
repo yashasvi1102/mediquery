@@ -1,0 +1,44 @@
+version: 2
+
+models:
+  - name: silver_conditions
+    description: |
+      Deduplicated FHIR Condition resources with SNOMED-based clinical classification.
+      Implements DD-001: only ~33% of rows are disorders; 67% are findings (SDOH,
+      administrative events) or situations. Use is_billable_diagnosis or condition_flag
+      for cohort queries — filtering on raw SNOMED codes inflates cohorts ~3x.
+    columns:
+      - name: condition_id
+        tests:
+          - unique
+          - not_null
+      - name: patient_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_patients')
+                field: patient_id
+      - name: snomed_code
+        tests:
+          - not_null
+      - name: clinical_category
+        description: "DD-001 classification: disorder | finding | situation | unknown"
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['disorder', 'finding', 'situation', 'unknown']
+      - name: condition_flag
+        description: |
+          Chronic-condition cohort flag for downstream Gold models.
+          NULL means not in a tracked chronic cohort.
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['diabetes_t2', 'hypertension', 'heart_failure', 'copd']
+              config:
+                where: "condition_flag is not null"
+      - name: is_billable_diagnosis
+        description: Mirrors clinical_category='disorder'. Used by Gold cohorts.
+        tests:
+          - not_null

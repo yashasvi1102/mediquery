@@ -1,0 +1,33 @@
+version: 2
+
+models:
+  - name: silver_observations
+    description: |
+      Deduplicated FHIR Observation resources. Blood pressure stored as 2 rows
+      (one per LOINC component), OMOP-style. See DD-002: ~49% of HbA1c readings
+      are biologically implausible (<4.0%) and Synthea does not link diagnoses to
+      realistic vitals. Filter on is_plausible_value=true for any clinical math.
+    columns:
+      - name: observation_id
+        tests:
+          - unique
+          - not_null
+      - name: patient_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_patients')
+                field: patient_id
+      - name: observation_kind
+        description: High-level bucket (hba1c, blood_pressure, weight, lab_other, ...).
+        tests:
+          - not_null
+      - name: is_plausible_value
+        description: DD-002 data-quality flag. Filter on this for any clinical analysis.
+        tests:
+          - not_null
+      - name: is_critical_value
+        description: Crosses clinical threshold. Drives Day 19 anomaly detection.
+        tests:
+          - not_null
