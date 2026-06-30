@@ -246,3 +246,70 @@ A running log of decisions, mistakes, and surprises during this 6-week build.
 - DEFERRED: bronze_observations + observation parser moved to Day 12.
   Day 11 absorbed the 1-2 hour parser fix; observations was the right
   thing to push.
+  ## Day 12 — silver_observations + Synthea data quality findings
+
+### Parser work
+- Extended fhir_parser to handle Observation resources. Four FHIR value shapes:
+  valueQuantity (numeric labs/vitals), valueCodeableConcept (categorical like
+  smoking status), valueString (free-text narratives), and component arrays
+  (multi-part observations like blood pressure).
+- Storage strategy: blood pressure split into 2 rows (one per LOINC component)
+  rather than 1 row with separate systolic/diastolic columns. Uniform schema,
+  industry-standard pattern (OMOP CDM). Slight row inflation accepted.
+- PRAPARE social-determinants survey caught a parser bug on first pass:
+  components with valueCodeableConcept (not valueQuantity) were returning
+  empty rows. Extended component handler to cover all 4 value shapes inside
+  components. Empty count dropped 210 -> 0.
+- Same source-of-truth pattern as Day 11 medication fix: parse_all_bundles.py
+  hardcoded 4 resource accumulators and silently dropped observations.
+  Refactored to derive accumulators from RESOURCE_EXTRACTORS dict so adding
+  a parser later flows through automatically.
+
+### Schema work
+- Bronze CREATE statements were never in version control (Day 5 ran them
+  interactively in DuckDB). Codified all 5 Bronze tables into
+  data_engineering/schema/bronze_schema.sql with IF NOT EXISTS so it's
+  idempotent. Schema is now reproducible from a fresh clone.
+- bronze_observations: 8,348,416 rows. 8.3M observations across 11,446
+  patients (~730 per patient).
+
+### Silver work
+- silver_observations adds observation_kind (high-level bucket like hba1c,
+  blood_pressure, weight, lab_other), is_critical_value (clinical thresholds
+  for Day 19 anomaly detection), is_plausible_value (data-quality flag for
+  biologically impossible Synthea values).
+
+### Synthea data quality findings (THIS IS THE STORY)
+- HbA1c: 49% of readings (44,108 of 90,453) are below 4.0%, which is
+  clinically impossible (incompatible with life). Population avg before
+  filter was 3.72%; after filter 5.9%. Realistic.
+- HbA1c for T2DM patients (post-filter): avg 5.6%. LOWER than the population
+  average. Real-world T2DM HbA1c averages 7-8%. Synthea is not generating
+  clinically diabetic values for diabetic patients.
+- BP for HTN patients: avg systolic 116.7. BP for non-HTN patients: avg
+  116.6. Zero clinical difference between diagnosed hypertensives and
+  controls. Real-world gap would be 15-25 mmHg.
+- CONCLUSION: Synthea assigns condition diagnoses without linking them to
+  realistic observation values. This is a known limitation of Synthea's
+  underlying clinical model.
+
+### Implications for Day 17
+- The original adherence story ("did metformin lower HbA1c?", "did
+  antihypertensives lower BP?") will NOT work on Synthea data.
+- Pivot to prescription-pattern adherence:
+    1. Treatment rate per condition (fill ratio) -- already computed
+    2. Persistence (days from first to last prescription)
+    3. Coverage gaps (intervals between consecutive prescriptions)
+- This is closer to industry-standard "Proportion of Days Covered" (PDC)
+  anyway. Real medication adherence research uses prescription data when
+  lab data is sparse or unreliable.
+- Document the finding in design_decisions.md as DD-002.
+
+### Interview talking point
+"I caught a clinically impossible 49% of HbA1c readings in the dataset.
+Rather than silently filter them out, I added an is_plausible_value flag
+so analytics can opt in. Then I dug deeper and found Synthea doesn't
+link diagnoses to vital signs in a clinically realistic way -- which
+means the original medication adherence story using clinical outcomes
+wouldn't work, so I pivoted to prescription-pattern adherence (proportion
+of days covered) which is the industry-standard approach anyway."

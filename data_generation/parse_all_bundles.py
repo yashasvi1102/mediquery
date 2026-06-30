@@ -5,8 +5,13 @@ Day 4 deliverable: scale fhir_parser.py from 1 bundle to thousands.
 
 Walks synthea/output/fhir/, parses each patient bundle, skips the
 hospitalInformation/practitionerInformation files (not patient bundles),
-logs and continues past any bad bundles, and writes 4 parquet files
+logs and continues past any bad bundles, and writes parquet files
 (one per resource type) into data_generation/parsed/.
+
+Accumulators derive from fhir_parser.RESOURCE_EXTRACTORS so adding a new
+resource type to the parser automatically extends this script with no edits.
+This is the source-of-truth pattern; the previous hardcoded list silently
+dropped observations on Day 12.
 
 Day 6 will pick up those parquet files and load them into DuckDB Bronze.
 
@@ -27,7 +32,7 @@ import pandas as pd
 
 # Make fhir_parser importable regardless of cwd
 sys.path.insert(0, str(Path(__file__).parent))
-from fhir_parser import load_bundle, parse_bundle  # noqa: E402
+from fhir_parser import load_bundle, parse_bundle, RESOURCE_EXTRACTORS  # noqa: E402
 
 
 # --- default paths ---
@@ -77,11 +82,10 @@ def main() -> int:
     print(f"Parsing {len(bundles):,} bundles from {args.fhir_dir}")
     print(f"Errors (if any) -> {ERROR_LOG}\n")
 
+    # Accumulators are derived from RESOURCE_EXTRACTORS so adding a new
+    # resource type to fhir_parser.py automatically flows through here.
     accumulators: dict[str, list[dict]] = {
-        "patients": [],
-        "encounters": [],
-        "conditions": [],
-        "medication_requests": [],
+        key: [] for key, _ in RESOURCE_EXTRACTORS.values()
     }
 
     successful = 0
@@ -96,7 +100,7 @@ def main() -> int:
             bundle = load_bundle(bundle_path)
             parsed = parse_bundle(bundle)
             for key in accumulators:
-                accumulators[key].extend(parsed[key])
+                accumulators[key].extend(parsed.get(key, []))
             successful += 1
         except Exception as exc:
             logging.warning("Failed: %s | %s: %s", bundle_path.name,

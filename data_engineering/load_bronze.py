@@ -69,6 +69,18 @@ TABLE_CONFIG: dict[str, tuple[str, list[str]]] = {
             "authored_on", "dosage_text",
         ],
     ),
+    "observations.parquet": (
+        "bronze.bronze_observations",
+        [
+            "observation_id", "parent_observation_id",
+            "patient_id", "encounter_id",
+            "status", "category",
+            "loinc_code", "loinc_display",
+            "value_numeric", "value_text",
+            "value_code", "value_code_system", "unit",
+            "effective_date", "issued_date",
+        ],
+    ),
 }
 
 

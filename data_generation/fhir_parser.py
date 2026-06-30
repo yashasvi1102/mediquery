@@ -212,7 +212,148 @@ def extract_medication_request(m: dict, med_lookup: dict[str, dict] | None = Non
         "authored_on": m.get("authoredOn"),
         "dosage_text": dosage.get("text"),
     }
+def extract_observations(o: dict) -> list[dict]:
+    """
+    Flatten an Observation resource. Returns a LIST because blood-pressure-style
+    observations (component arrays) are split into one row per component.
 
+    Synthea emits four shapes:
+      - valueQuantity        -> numeric lab/vital (HbA1c, glucose, weight)
+      - component[]          -> multi-part (blood pressure: systolic + diastolic)
+      - valueCodeableConcept -> categorical (smoking status, SNOMED-coded)
+      - valueString          -> free-text narrative (procedure notes)
+
+    Storage strategy (Option 3): blood pressure splits into 2 rows, each with its
+    own LOINC code. Every row has the same column shape regardless of source.
+    Querying BP becomes: WHERE loinc_code = '8480-6' (systolic).
+    """
+    base_id = o.get("id")
+    patient_id = _normalize_ref(_safe_get(o, "subject", "reference"))
+    encounter_id = _normalize_ref(_safe_get(o, "encounter", "reference"))
+    effective = o.get("effectiveDateTime")
+    issued = o.get("issued")
+    status = o.get("status")
+    category = _safe_get(o, "category", 0, "coding", 0, "code")
+    parent_code = _safe_get(o, "code", "coding", 0) or {}
+
+    rows: list[dict] = []
+
+    # CASE 1: component array (blood pressure has valueQuantity components;
+    # PRAPARE social-determinants survey has valueCodeableConcept components).
+    # Emit one row per component, handling each value shape.
+    components = o.get("component") or []
+    if components:
+        for idx, comp in enumerate(components):
+            coding = _safe_get(comp, "code", "coding", 0) or {}
+            comp_vq = comp.get("valueQuantity")
+            comp_vcc = comp.get("valueCodeableConcept")
+            comp_vs = comp.get("valueString")
+
+            value_numeric = None
+            value_text = None
+            value_code = None
+            value_code_system = None
+            unit = None
+
+            if comp_vq is not None:
+                value_numeric = comp_vq.get("value")
+                unit = comp_vq.get("unit")
+            elif comp_vcc is not None:
+                inner = _safe_get(comp_vcc, "coding", 0) or {}
+                value_text = comp_vcc.get("text") or inner.get("display")
+                value_code = inner.get("code")
+                value_code_system = inner.get("system")
+            elif comp_vs is not None:
+                value_text = comp_vs
+
+            rows.append({
+                "observation_id": f"{base_id}_{idx}",
+                "parent_observation_id": base_id,
+                "patient_id": patient_id,
+                "encounter_id": encounter_id,
+                "status": status,
+                "category": category,
+                "loinc_code": coding.get("code"),
+                "loinc_display": coding.get("display"),
+                "value_numeric": value_numeric,
+                "value_text": value_text,
+                "value_code": value_code,
+                "value_code_system": value_code_system,
+                "unit": unit,
+                "effective_date": effective,
+                "issued_date": issued,
+            })
+        return rows
+
+    # CASE 2: valueQuantity (numeric lab or vital)
+    vq = o.get("valueQuantity")
+    if vq is not None:
+        rows.append({
+            "observation_id": base_id,
+            "parent_observation_id": None,
+            "patient_id": patient_id,
+            "encounter_id": encounter_id,
+            "status": status,
+            "category": category,
+            "loinc_code": parent_code.get("code"),
+            "loinc_display": parent_code.get("display"),
+            "value_numeric": vq.get("value"),
+            "value_text": None,
+            "value_code": None,
+            "value_code_system": None,
+            "unit": vq.get("unit"),
+            "effective_date": effective,
+            "issued_date": issued,
+        })
+        return rows
+
+    # CASE 3: valueCodeableConcept (categorical: smoking status, etc.)
+    vcc = o.get("valueCodeableConcept")
+    if vcc is not None:
+        coded = _safe_get(vcc, "coding", 0) or {}
+        rows.append({
+            "observation_id": base_id,
+            "parent_observation_id": None,
+            "patient_id": patient_id,
+            "encounter_id": encounter_id,
+            "status": status,
+            "category": category,
+            "loinc_code": parent_code.get("code"),
+            "loinc_display": parent_code.get("display"),
+            "value_numeric": None,
+            "value_text": vcc.get("text") or coded.get("display"),
+            "value_code": coded.get("code"),
+            "value_code_system": coded.get("system"),
+            "unit": None,
+            "effective_date": effective,
+            "issued_date": issued,
+        })
+        return rows
+
+    # CASE 4: valueString (free-text narrative)
+    vs = o.get("valueString")
+    if vs is not None:
+        rows.append({
+            "observation_id": base_id,
+            "parent_observation_id": None,
+            "patient_id": patient_id,
+            "encounter_id": encounter_id,
+            "status": status,
+            "category": category,
+            "loinc_code": parent_code.get("code"),
+            "loinc_display": parent_code.get("display"),
+            "value_numeric": None,
+            "value_text": vs,
+            "value_code": None,
+            "value_code_system": None,
+            "unit": None,
+            "effective_date": effective,
+            "issued_date": issued,
+        })
+        return rows
+
+    # CASE 5: no value at all (skip; rare edge case)
+    return rows
 # ---------- bundle-level convenience ----------
 
 RESOURCE_EXTRACTORS = {
@@ -220,6 +361,7 @@ RESOURCE_EXTRACTORS = {
     "Encounter": ("encounters", extract_encounter),
     "Condition": ("conditions", extract_condition),
     "MedicationRequest": ("medication_requests", extract_medication_request),
+    "Observation": ("observations", extract_observations),
 }
 
 
@@ -227,14 +369,16 @@ def parse_bundle(bundle: dict) -> dict[str, list[dict]]:
     """Parse one Synthea bundle into typed lists of flat dicts."""
     out: dict[str, list[dict]] = {key: [] for key, _ in RESOURCE_EXTRACTORS.values()}
 
-    # MedicationRequest needs a lookup of contained Medication resources
-    # to resolve medicationReference fallbacks. Build once per bundle.
+    # MedicationRequest needs a Medication-resource lookup for reference fallback.
     med_lookup = build_medication_lookup(bundle)
 
     for resource_type, (key, extractor) in RESOURCE_EXTRACTORS.items():
         for resource in iter_resources(bundle, resource_type):
             if resource_type == "MedicationRequest":
                 out[key].append(extractor(resource, med_lookup))
+            elif resource_type == "Observation":
+                # Observation extractor returns a list (BP -> 2 rows)
+                out[key].extend(extractor(resource))
             else:
                 out[key].append(extractor(resource))
     return out

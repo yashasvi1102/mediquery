@@ -9,3 +9,4 @@ sources:
       - name: bronze_encounters
       - name: bronze_conditions
       - name: bronze_medication_requests
+      - name: bronze_observations
