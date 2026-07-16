@@ -430,3 +430,31 @@ encounters. Day 10's 12,223 figure was correct. Simpler query
   pattern is: Synthea is excellent at encounters and diagnoses, weak on
   observations and dispensing. Portfolio projects that don't validate
   against real-world benchmarks miss this."
+  ## Day 18 — gold_utilization + gold_provider_volume
+
+- Two simple aggregation Gold models. 27 dbt tests + 6 validate_gold
+  assertions, all passing.
+- Cross-layer reconciliation exact:
+    11,446 patients (Silver) -> 11,446 rows (gold_utilization)
+    669,189 encounters (Silver) -> 669,189 (sum in gold_utilization)
+    1,089 providers (Silver) -> 1,089 rows (gold_provider_volume)
+- Top provider volume: 20,713 encounters / 2,469 unique patients.
+  Long tail: median provider = 117 encounters.
+- Cost NOT modeled. Synthea generates fabricated CPT-rate costs that don't
+  reflect real payer contracts. Length of stay + duration used as
+  utilization proxies. Optional Week 4+ extension: parse Encounter.cost.
+- top_clinical_category column is uninformative: 69.5% "disorder", 30.5%
+  NULL. All billable diagnoses classify to "disorder" in Synthea, so the
+  column adds no signal. Documented in schema.yml. Day 21 cleanup: upgrade
+  to top_clinical_subcategory if kept.
+- No new DDs. Aggregations produced expected results.
+- Zero-encounter patients: 0. Every Synthea patient has at least one
+  encounter (birth encounter minimum). LEFT JOIN preserved but not needed.
+  - top_clinical_category upgrade attempted (would show cardiac/endocrine/
+  respiratory instead of uniform "disorder"). Blocked: silver_conditions
+  doesn't have clinical_subcategory column. DD-001 stopped at the
+  category level (disorder/finding/situation). Adding subcategory would
+  require rebuilding Silver, which touches Day 10 work.
+- Day 21 cleanup option: add clinical_subcategory to silver_conditions
+  via SNOMED-code-to-body-system lookup, then rerun gold_provider_volume.
+- Not doing tonight. Scope creep.

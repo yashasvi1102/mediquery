@@ -225,6 +225,60 @@ def check_medication_adherence(con):
     results.append(equals(max_pdc, 1.0, "max PDC (should cap at 1.0)"))
 
     return all(results)
+def check_utilization(con):
+    print("\n== gold_utilization ==")
+    results = []
+
+    # Row count must match silver_patients exactly.
+    silver_count = scalar(con, "select count(*) from silver.silver_patients")
+    gold_count   = scalar(con, "select count(*) from gold.gold_utilization")
+    results.append(equals(gold_count, silver_count,
+                          f"row count == silver_patients ({silver_count})"))
+
+    # Encounter type sum must match silver_encounters total.
+    silver_encounters = scalar(con,
+        "select count(*) from silver.silver_encounters")
+    gold_encounter_sum = scalar(con, """
+        select sum(total_encounters) from gold.gold_utilization
+    """)
+    results.append(equals(gold_encounter_sum, silver_encounters,
+                          f"sum(total_encounters) == silver_encounters ({silver_encounters})"))
+
+    # Inpatient encounters should sum to Day 10's 12,223.
+    gold_inpatient_sum = scalar(con,
+        "select sum(inpatient_encounters) from gold.gold_utilization")
+    results.append(equals(gold_inpatient_sum, 12223,
+                          "sum(inpatient_encounters) (Day 10 = 12,223)"))
+
+    return all(results)
+
+
+def check_provider_volume(con):
+    print("\n== gold_provider_volume ==")
+    results = []
+
+    # Row count == distinct providers in silver.
+    silver_providers = scalar(con,
+        "select count(distinct provider_id) from silver.silver_encounters where provider_id is not null")
+    gold_providers = scalar(con, "select count(*) from gold.gold_provider_volume")
+    results.append(equals(gold_providers, silver_providers,
+                          f"provider count == silver distinct providers ({silver_providers})"))
+
+    # Encounter sum must reconcile to silver.
+    silver_encounters = scalar(con,
+        "select count(*) from silver.silver_encounters where provider_id is not null")
+    gold_encounter_sum = scalar(con,
+        "select sum(total_encounters) from gold.gold_provider_volume")
+    results.append(equals(gold_encounter_sum, silver_encounters,
+                          f"sum(total_encounters) == silver provider-attributed encounters"))
+
+    # Top provider sanity: at least one provider with 10K+ encounters.
+    max_encounters = scalar(con,
+        "select max(total_encounters) from gold.gold_provider_volume")
+    results.append(between(max_encounters, 10000, 25000,
+                           "max provider encounters (top provider volume)"))
+
+    return all(results)
 # ---------- entry point ----------
 
 def main():
@@ -235,6 +289,8 @@ def main():
         check_readmissions(con),
         check_chronic_conditions(con),
         check_medication_adherence(con),
+        check_utilization(con),
+        check_provider_volume(con),
     ]
 
     print()

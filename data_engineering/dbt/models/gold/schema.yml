@@ -133,6 +133,7 @@ models:
           - accepted_values:
               arguments:
                 values: [true, false]
+
   - name: gold_chronic_conditions
     description: |
       Chronic conditions cohort. One row per (patient_id, condition_flag) pair
@@ -224,7 +225,6 @@ models:
               arguments:
                 values: [true, false]
 
-    
   - name: gold_medication_adherence
     description: |
       Medication adherence via approximated PDC (Proportion of Days Covered).
@@ -240,10 +240,13 @@ models:
       so clinical-outcome adherence is meaningless on this data. PDC is the
       industry-standard fallback. See DD-002 for full rationale.
 
-      Supply is APPROXIMATED — Synthea emits no daysSupply / quantity / refills.
-      Assumed days_supply is class-level (90d for chronic oral maintenance,
-      30d for inhalers, insulin, anticoagulants, opioids) based on published
-      real-world dispensing patterns.
+      DD-004: Synthea emits MedicationRequest (prescriptions) but not
+      MedicationDispense (pharmacy fills). PDC underestimates real-world
+      adherence by 30-50% as a result. Persistence is the operative signal.
+
+      Supply is APPROXIMATED — assumed days_supply is class-level (90d for
+      chronic oral maintenance, 30d for inhalers, insulin, anticoagulants,
+      opioids) based on published real-world dispensing patterns.
 
     columns:
       - name: patient_id
@@ -288,43 +291,24 @@ models:
           Class-level supply assumption. 90 for chronic oral maintenance,
           30 for inhalers, insulin, anticoagulants, opioids, and default.
 
-      - name: total_days_supplied
-        description: prescription_count * assumed_days_supply. Uncapped raw supply.
+      - name: lifetime_days_supplied
+        description: prescription_count * assumed_days_supply across all fills. Uncapped.
 
       - name: measurement_period_days
-        description: |
-          Days from first_prescription to observation_end (deceased_date if
-          deceased, current_timestamp if living). Denominator of PDC.
+        description: Fixed at 365 per CMS PDC methodology.
 
-      - name: days_covered
-        description: |
-          least(total_days_supplied, measurement_period_days). No over-coverage.
-          Numerator of PDC.
-
-      - name: pdc
-        description: |
-          Proportion of Days Covered. Range 0.0 to 1.0. NULL when
-          measurement_period_days = 0 (single-fill patient).
-
-      - name: persistence_days
-        description: |
-          Days from first to last prescription. Different from days_covered —
-          measures continuity of prescribing, not coverage density.
-
-      - name: adherence_class
-        description: |
-          CMS-aligned bucket: adherent (PDC >= 0.80), partial (0.50-0.80),
-          non_adherent (< 0.50), single_fill (measurement_period_days = 0).
-        tests:
-          - not_null
-          - accepted_values:
-              arguments:
-                values: [adherent, partial, non_adherent, single_fill]
-      
       - name: fills_in_window
         description: Number of prescriptions authored within the 365-day PDC window ending at last_prescription.
         tests:
           - not_null
+
+      - name: days_covered
+        description: least(raw_days_covered, 365). Numerator of PDC.
+
+      - name: pdc
+        description: |
+          Proportion of Days Covered over CMS 365-day window ending at
+          last_prescription. Range 0.0 to 1.0.
 
       - name: lifetime_period_days
         description: |
@@ -336,3 +320,188 @@ models:
           Lifetime coverage. Reference metric — captures long-run persistence but
           is not CMS PDC. See DD-004 for the distinction. NULL for zero-window
           patients.
+
+      - name: persistence_days
+        description: |
+          Days from first to last prescription. Different from days_covered —
+          measures continuity of prescribing, not coverage density. Per DD-004
+          this is the operative adherence signal on Synthea data.
+
+      - name: adherence_class
+        description: |
+          CMS-aligned bucket: adherent (PDC >= 0.80), partial (0.50-0.80),
+          non_adherent (< 0.50), single_fill (prescription_count = 1).
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [adherent, partial, non_adherent, single_fill]
+
+  - name: gold_utilization
+    description: |
+      Per-patient utilization metrics. One row per patient (LEFT JOIN preserves
+      patients with zero encounters). Counts encounters by type, sums inpatient
+      days, and tracks first/last encounter dates.
+
+      Cost is not modeled — Synthea's cost data is fabricated at fixed CPT
+      rates and doesn't reflect real payer contracts. Length of stay and
+      duration serve as utilization proxies.
+
+      Grain: patient_id (unique).
+
+    columns:
+      - name: patient_id
+        description: FHIR Patient resource id.
+        tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                to: ref('silver_patients')
+                field: patient_id
+
+      - name: total_encounters
+        description: Total encounters of any type. Zero for patients with no encounter history.
+        tests:
+          - not_null
+
+      - name: ambulatory_encounters
+        description: Outpatient/clinic visits (FHIR class AMB).
+        tests:
+          - not_null
+
+      - name: emergency_encounters
+        description: ED visits (FHIR class EMER).
+        tests:
+          - not_null
+
+      - name: inpatient_encounters
+        description: Hospital admissions (FHIR class IMP).
+        tests:
+          - not_null
+
+      - name: home_health_encounters
+        description: Home health visits (FHIR class HH).
+        tests:
+          - not_null
+
+      - name: virtual_encounters
+        description: Telehealth (FHIR class VR).
+        tests:
+          - not_null
+
+      - name: total_inpatient_days
+        description: Sum of length_of_stay_days across inpatient encounters. Zero if none.
+        tests:
+          - not_null
+
+      - name: avg_encounter_duration_minutes
+        description: Mean encounter duration. NULL for patients with no encounters.
+
+      - name: first_encounter_date
+        description: Earliest start_time across all encounters. NULL for patients with none.
+
+      - name: last_encounter_date
+        description: Latest start_time across all encounters. NULL for patients with none.
+
+      - name: active_days
+        description: Days from first_encounter_date to last_encounter_date. Zero for zero-encounter patients.
+        tests:
+          - not_null
+
+      - name: has_no_encounters
+        description: True if the patient has zero encounter records.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+
+  - name: gold_provider_volume
+    description: |
+      Per-provider volume metrics. One row per provider that appears in
+      silver_encounters. Tracks total encounters, unique patients served,
+      encounter mix by type, inpatient days, and most common clinical
+      category treated.
+
+      top_clinical_category uses is_billable_diagnosis filter (DD-001) to
+      skip Synthea's non-clinical findings when ranking condition
+      categories per provider.
+
+      Grain: provider_id (unique).
+
+    columns:
+      - name: provider_id
+        description: FHIR Practitioner resource id.
+        tests:
+          - not_null
+          - unique
+
+      - name: total_encounters
+        description: All encounters attributed to this provider.
+        tests:
+          - not_null
+
+      - name: unique_patients
+        description: Distinct patients seen by this provider.
+        tests:
+          - not_null
+
+      - name: avg_encounters_per_patient
+        description: total_encounters / unique_patients. Panel loyalty proxy.
+        tests:
+          - not_null
+
+      - name: ambulatory_encounters
+        description: Outpatient volume.
+        tests:
+          - not_null
+
+      - name: emergency_encounters
+        description: ED volume.
+        tests:
+          - not_null
+
+      - name: inpatient_encounters
+        description: Admissions volume.
+        tests:
+          - not_null
+
+      - name: home_health_encounters
+        description: Home health volume.
+        tests:
+          - not_null
+
+      - name: virtual_encounters
+        description: Telehealth volume.
+        tests:
+          - not_null
+
+      - name: total_inpatient_days
+        description: Cumulative length of stay across all admissions. Zero if none.
+        tests:
+          - not_null
+
+      - name: avg_encounter_duration_minutes
+        description: Mean encounter duration across this provider's encounters.
+
+      - name: first_encounter_date
+        description: Earliest recorded encounter for this provider.
+        tests:
+          - not_null
+
+      - name: last_encounter_date
+        description: Latest recorded encounter for this provider.
+        tests:
+          - not_null
+
+      - name: active_days
+        description: Days from first_encounter_date to last_encounter_date.
+        tests:
+          - not_null
+
+      - name: top_clinical_category
+        description: |
+          Most common clinical_category (from silver_conditions) diagnosed by
+          this provider. NULL for providers whose encounters had no billable
+          diagnoses recorded. Ties broken alphabetically.
