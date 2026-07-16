@@ -330,3 +330,20 @@ of days covered) which is the industry-standard approach anyway."
   reproducible from the data. If I claim 49% HbA1c implausibility, the
   validation script proves it. Anti-pattern: documenting numbers no test
   enforces — they go stale silently.
+  ## Day 14
+  - README restructured; DD-002 promoted to own section.
+- DuckDB rationale reframed as trade-off, not workaround.
+- Quickstart added — verified commands run from a fresh clone (if you actually verified this; if not, note that it's untested).
+- Decision on the `is_billable_diagnosis` enforcement question (whatever you chose in Task 8).
+- LinkedIn draft written, publishing Monday.
+- Week 3 pre-flight (see Task 11).
+## Day 15 pre-flight :
+- 12,223 inpatient encounters across 4,609 patients (40% of cohort)
+- 2.65 avg inpatient stays per inpatient patient
+- 2,099 patients qualify as readmission candidates (2+ inpatient stays)
+- Sufficient signal for 30-day window analysis — no rescoping needed.
+
+Gotcha caught: initial preflight query nested COUNT(*) inside a
+patient-level GROUP BY, so the outer count returned patients, not
+encounters. Day 10's 12,223 figure was correct. Simpler query
+(COUNT(*) with WHERE clause, no subquery) is the right pattern.
