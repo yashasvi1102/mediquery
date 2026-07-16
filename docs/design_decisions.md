@@ -195,4 +195,51 @@ MedicationDispense stream that real pharmacies produce.
   prescriptions, not dispensing. Persistence is the right signal here.
   This is the kind of gap you only catch by validating your model
   against a known benchmark."
-  
+  ## DD-005: Anomaly types dropped after baseline analysis
+
+
+
+### Context
+
+The Week 6 anomaly benchmark requires ground-truth injected anomalies with
+measurable signal:noise ratios. Day 19 designed 4 anomaly types and
+measured baseline detection counts (pre-injection) to size the injected
+volumes correctly.
+
+### Findings
+
+- Warfarin + NSAID/aspirin: baseline 11, target 30. Ships.
+- HF 7-day readmission: baseline 5, target 25. Ships.
+- Chronic-drug persistence gap: baseline 3,274 unrefined, 2,433 after
+  filtering to still-engaged patients. Target 40. Ratio 1:60. Undetectable
+  signal.
+- Post-discharge no-fill: baseline 791 unrefined, 470 refined. Target 25.
+  Ratio 1:19. Undetectable signal.
+
+### Root cause
+
+Both dropped anomaly types measure absence of a subsequent prescription.
+DD-004 documented that Synthea generates MedicationRequest per encounter,
+not per pharmacy fill — so long gaps between prescriptions are the
+statistical norm for chronic patients, not the exception. Baseline
+detection queries return every natural gap as a hit.
+
+### Decision
+
+Drop chronic-drug persistence gap and post-discharge no-fill from the
+Week 6 benchmark. Ship 2 anomaly types (warfarin coprescription, HF
+early readmission).
+
+### Consequences
+
+- Benchmark suite has 2 injected types instead of 4. Statistically valid
+  precision/recall for both.
+- The AI agent (Day 32) is trained/prompted to detect drug interactions
+  and readmission anomalies. Adherence-style anomaly detection is out of
+  scope for the demo.
+- Documentation and interview narrative lead with the honest scope reset:
+  "Dropped 2 of 4 anomalies after baselines showed Synthea's prescription
+  model made them undetectable. Better to measure 2 things well than
+  4 things poorly."
+- If Bronze is ever rebuilt with MedicationDispense parsing (Week 4+
+  extension), these anomalies become detectable and can be reinstated.
