@@ -458,3 +458,23 @@ encounters. Day 10's 12,223 figure was correct. Simpler query
 - Day 21 cleanup option: add clinical_subcategory to silver_conditions
   via SNOMED-code-to-body-system lookup, then rerun gold_provider_volume.
 - Not doing tonight. Scope creep.
+## Day 19 — Anomaly framework design + baseline analysis
+
+- Designed 4 anomaly types in docs/anomaly_framework.md.
+- Measured baselines pre-injection to size injected volumes correctly.
+- Baselines:
+    Warfarin + NSAID/aspirin: 11 (ship, ratio 3:1)
+    HF 7-day readmission: 5 (ship, ratio 5:1)
+    Chronic-drug persistence gap: 2,433 refined (drop, ratio 1:60)
+    Post-discharge no-fill: 470 refined (drop, ratio 1:19)
+- DD-005: dropped 2 anomaly types. DD-004 root cause. Both measure
+  absence of prescriptions, which Synthea doesn't model reliably.
+- silver_medications.drug_class taxonomy gap discovered: no anticoagulant
+  or antiplatelet classes. Warfarin sits under 'other'. Aspirin sits
+  under 'other'. Day 21 cleanup: add these classes and rebuild silver.
+  For Day 20 anomaly detection, using medication_display ilike instead.
+- gold.ground_truth_anomalies table designed but NOT created. Day 20 job.
+- Interview point: baselines revealed the framework had to shrink from
+  4 anomalies to 2 to produce measurable precision/recall. Honest scope
+  reset beats padded scope. Ships 2 with 3-5x signal:noise > 4 with poor.
+- Zero injector code today. Design first, code Day 20.
