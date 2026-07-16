@@ -347,3 +347,33 @@ Gotcha caught: initial preflight query nested COUNT(*) inside a
 patient-level GROUP BY, so the outer count returned patients, not
 encounters. Day 10's 12,223 figure was correct. Simpler query
 (COUNT(*) with WHERE clause, no subquery) is the right pattern.
+## Day 15 — gold_readmissions (CMS-aligned)
+
+- Built gold_readmissions with LAG-based window function pairing.
+  4,860 total pairs after excluding overlaps and >365-day gaps.
+- Three orthogonal filters uncovered during sanity-checking:
+    1. Overlap exclusion (days_between >= 0) — Synthea generates concurrent
+       long-stay + acute encounters. Would have shipped a min_days = -5 bug.
+    2. Planned admission exclusion (TNM staging, chemotherapy, therapy regimens)
+       — Synthea codes recurring oncology follow-ups as inpatient encounters.
+    3. Clinical reason exclusion (readmission_reason_is_clinical) — Synthea uses
+       history codes and procedure codes as encounter reasons (CABG history,
+       "patient transfer to SNF"). These dominated the pre-filter top 10.
+
+- Rate progression through the filters:
+    Raw:                            45.23% (4,860 pairs)
+    Unplanned only:                 58.47% (1,382 pairs)   ← worse, exposed filter 3 was needed
+    Clinical + unplanned:           19.34%  (543 pairs)    ← real signal
+    Real-world CMS benchmark:      ~15%
+
+- Post-filter top-10 finally looks clinically plausible: heart failure (#1),
+  COVID-19 (#2), MI, aortic valve disease, drug abuse. Real acute drivers.
+
+- Aggregation-bug caught during preflight: nested COUNT(*) inside a
+  patient-level GROUP BY returns patient count, not encounter count.
+  Same 4,609 for total_inpatient and patients_with_inpatient was the tell.
+
+- DD-003 candidate confirmed: SNOMED suffix classification is not local to
+  silver_conditions. It needs to be applied anywhere Synthea uses SNOMED:
+  condition codes (DD-001), encounter reasons (Day 15), and likely
+  observation categories (Day 18 utilization work).

@@ -93,3 +93,39 @@ encounter and diagnosis workflows but not pathophysiology.
 - Project's safety-first positioning is strengthened: the is_plausible_value
   flag and the transparent README disclosure demonstrate the data-quality
   rigor the project is supposed to model.
+  ## DD-003: SNOMED suffix classification is a cross-resource pattern
+
+**Date:** 2026-XX-XX (Day 15)
+**Status:** Accepted
+
+### Context
+
+DD-001 established that FHIR Condition resources need SNOMED suffix
+classification (disorder / finding / situation) because Synthea encodes
+diagnoses, social factors, and administrative events in the same table.
+
+While building gold_readmissions, discovered the same pattern in
+Encounter.reasonCode: Synthea uses history codes ("History of CABG"),
+procedure codes ("Patient transfer to SNF"), and staging codes ("TNM
+stage 1") as encounter reasons — inflating readmission cohorts by 3-4x
+if used naively.
+
+### Decision
+
+Treat SNOMED suffix classification as a project-wide utility, not a
+column specific to silver_conditions. Apply the same pattern to any
+SNOMED-coded field: encounter reasons (done Day 15), observation
+categories (Day 18 candidate), procedure classifications (Week 4 graph
+ingestion candidate).
+
+### Consequences
+
+- gold_readmissions has three orthogonal filters (overlap, planned,
+  clinical) that together bring the 30-day rate from 45% to 19% —
+  close to real-world CMS 15%.
+- Future Gold models must apply the clinical filter before publishing
+  cohort counts. Add a documentation note to any new Gold model
+  referencing SNOMED codes.
+- Consider extracting the suffix classification into a dbt macro to
+  avoid copy-paste across models. Deferred — do it if a fourth use
+  case appears.

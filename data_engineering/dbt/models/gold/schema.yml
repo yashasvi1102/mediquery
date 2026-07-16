@@ -1,0 +1,135 @@
+version: 2
+
+models:
+  - name: gold_readmissions
+    description: |
+      Hospital readmission pairs. One row per (index encounter, next inpatient
+      encounter) pair for the same patient. is_30_day_readmission flags pairs
+      where the second encounter starts within 30 days of the first's discharge.
+
+      Definition follows CMS Hospital-Wide Readmission (HWR): all-cause
+      unplanned 30-day readmissions. Overlapping encounters (days_between < 0)
+      and pairs > 365 days apart are excluded. Same-day readmissions are
+      included and flagged; downstream models can filter via is_same_day = false.
+
+      Reason codes are classified using the DD-001 SNOMED-suffix pattern so
+      history and situation codes (which Synthea uses for follow-up visits)
+      can be filtered out via readmission_reason_is_clinical.
+
+      Grain: one row per readmission pair (patient, index_encounter, next_encounter).
+      A patient with 3 inpatient encounters produces up to 2 rows in this table.
+
+    columns:
+      - name: patient_id
+        description: FHIR Patient resource id.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_patients')
+                field: patient_id
+
+      - name: index_encounter_id
+        description: The prior inpatient encounter in the pair.
+        tests:
+          - not_null
+
+      - name: index_discharge
+        description: end_time of the index encounter. Used as the anchor for the 30-day window.
+        tests:
+          - not_null
+
+      - name: index_reason_code
+        description: SNOMED code of the primary reason for the index admission.
+
+      - name: index_reason_display
+        description: Human-readable reason for the index admission.
+
+      - name: index_length_of_stay_days
+        description: Length of stay of the index encounter, in days.
+
+      - name: readmission_encounter_id
+        description: The subsequent inpatient encounter in the pair.
+        tests:
+          - not_null
+          - unique
+
+      - name: readmission_start
+        description: start_time of the subsequent inpatient encounter.
+        tests:
+          - not_null
+
+      - name: readmission_reason_code
+        description: SNOMED code of the primary reason for the readmission.
+
+      - name: readmission_reason_display
+        description: Human-readable reason for the readmission.
+
+      - name: readmission_provider_id
+        description: Provider associated with the readmission encounter.
+
+      - name: days_between
+        description: Days between index_discharge and readmission_start. Never negative, capped at 365.
+        tests:
+          - not_null
+
+      - name: is_same_day
+        description: True if the readmission starts on the same calendar day as the index discharge.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+
+      - name: is_30_day_readmission
+        description: True if days_between <= 30. Core CMS-aligned readmission flag.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+
+      - name: is_same_reason
+        description: |
+          True if the index and readmission share the same SNOMED reason_code.
+          Useful for distinguishing complication-driven readmissions from unrelated ones.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+
+      - name: readmission_reason_category
+        description: |
+          Classification of readmission reason SNOMED code by suffix.
+          Same pattern as silver_conditions DD-001. Values: disorder, finding,
+          situation, procedure, therapy, history, other.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [disorder, finding, situation, procedure, therapy, history, other]
+
+      - name: readmission_reason_is_clinical
+        description: |
+          True only for disorder and finding codes. Filters out history and
+          situation codes that Synthea uses for follow-up visits (e.g., cancer
+          TNM staging, "history of CABG").
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+
+      - name: is_likely_planned
+        description: |
+          Heuristic flag for planned readmissions (oncology staging, chemotherapy,
+          therapy regimens). Excluded from unplanned readmission analysis.
+          Real CMS methodology (Planned Readmission Algorithm v4.0) uses a much
+          larger code list; this is a Synthea-specific approximation targeting
+          the TNM staging admissions that dominate the raw counts.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
