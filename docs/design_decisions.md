@@ -95,8 +95,6 @@ encounter and diagnosis workflows but not pathophysiology.
   rigor the project is supposed to model.
   ## DD-003: SNOMED suffix classification is a cross-resource pattern
 
-**Date:** 2026-XX-XX (Day 15)
-**Status:** Accepted
 
 ### Context
 
@@ -129,3 +127,72 @@ ingestion candidate).
 - Consider extracting the suffix classification into a dbt macro to
   avoid copy-paste across models. Deferred — do it if a fourth use
   case appears.
+
+
+  ## DD-004: Synthea prescriptions are authorization events, not dispensing records
+
+**Date:** 2026-XX-XX (Day 17)
+**Status:** Accepted limitation. PDC ships as informational; persistence is
+the operative adherence signal.
+
+### Context
+
+Built gold_medication_adherence using CMS-standard PDC (Proportion of Days
+Covered) methodology over a 365-day window ending at last_prescription.
+Expected class-level variation (insulin lower PDC than metformin, etc.) and
+overall averages of 60-80% (consistent with published real-world PDC).
+
+### Findings
+
+PDC distribution is bimodal, not normally distributed:
+- 64% of patient-drug pairs: PDC < 0.25 (sparse fills)
+- 20%: PDC >= 0.80 (dense fills)
+- 5% in the 0.50-0.80 middle range
+
+Overall PDC averages by class: HTN 0.41, diabetes 0.50, HF 0.60, COPD 0.20.
+All far below published real-world PDC benchmarks (~60-70% for chronic
+oral maintenance).
+
+Meanwhile, persistence (days from first to last prescription) is strong:
+median HTN persistence 3,612 days (9.9 years). 91% of HTN pairs persist
+>= 1 year. Diabetes and COPD similar. Heart failure lower (median 482 days)
+as expected clinically.
+
+### Root cause
+
+Synthea generates MedicationRequest resources tied to encounters, not
+between-encounter pharmacy refills. A real patient on daily metformin
+generates ~12 pharmacy fill records per year even without physician visits.
+A Synthea patient generates one MedicationRequest per physician visit —
+which may be years apart even for chronic conditions.
+
+This is not a Synthea bug. FHIR MedicationRequest is the authorization
+event, not the dispensing event (that's MedicationDispense). Synthea
+emits MedicationRequest correctly. It just doesn't simulate the
+MedicationDispense stream that real pharmacies produce.
+
+### Decision
+
+1. Keep PDC in the model as an informational metric. Document that it
+   reflects prescription density, not true medication coverage.
+2. Add persistence_days as a peer metric and lead with it in analytics.
+3. Adherence class buckets stay CMS-aligned (adherent >= 0.80) so the
+   model matches industry standard, but downstream reporting must caveat
+   that Synthea PDC underestimates real-world adherence by 30-50%.
+4. Do NOT invent synthetic fill records to make PDC look better. Fudging
+   generation data to match target metrics undermines the whole project.
+
+### Consequences
+
+- Any dashboard or interview claim using this table must lead with
+  persistence and mention PDC with the DD-004 caveat.
+- Week 4 knowledge graph should include MedicationRequest nodes with
+  authored_on timestamps, not synthetic fill events.
+- If a future MedicationDispense simulator is built (not this project),
+  PDC would become the primary metric and persistence the secondary.
+- Interview narrative: "I built industry-standard PDC and immediately
+  found it doesn't work on Synthea data — because Synthea models
+  prescriptions, not dispensing. Persistence is the right signal here.
+  This is the kind of gap you only catch by validating your model
+  against a known benchmark."
+  

@@ -170,7 +170,61 @@ def check_chronic_conditions(con):
 
     return all(results)
 
+def check_medication_adherence(con):
+    print("\n== gold_medication_adherence ==")
+    results = []
 
+    # Row counts by class must match sanity-check output.
+    total_rows = scalar(con,
+        "select count(*) from gold.gold_medication_adherence")
+    results.append(between(total_rows, 8000, 9500,
+                           "total patient-class pairs (Day 17 = 8,546)"))
+
+    # DD-004: bimodal PDC. At least 60% of pairs must fall below 0.25 and
+    # at least 15% must be >= 0.80 (the "sparse vs dense" split).
+    pct_below_25 = scalar(con, """
+        select round(100.0 * count(*) filter (where pdc < 0.25) / count(*), 1)
+        from gold.gold_medication_adherence
+        where pdc is not null
+    """)
+    results.append(between(float(pct_below_25), 60.0, 70.0,
+                           "%% PDC < 0.25 (DD-004 sparse tail, Day 17 = 63.5%)"))
+
+    pct_gte_80 = scalar(con, """
+        select round(100.0 * count(*) filter (where pdc >= 0.80) / count(*), 1)
+        from gold.gold_medication_adherence
+        where pdc is not null
+    """)
+    results.append(between(float(pct_gte_80), 15.0, 25.0,
+                           "%% PDC >= 0.80 (DD-004 dense tail, Day 17 = 19.9%)"))
+
+    # Persistence is strong. Median HTN persistence >= 5 years.
+    htn_median_persistence = scalar(con, """
+        select percentile_cont(0.5) within group (order by persistence_days)
+        from gold.gold_medication_adherence
+        where medication_flag = 'antihypertensive'
+    """)
+    results.append(between(htn_median_persistence, 1825, 4000,
+                           "HTN median persistence days (Day 17 = 3,612)"))
+
+    # No orphan patient_ids.
+    orphans = scalar(con, """
+        select count(*)
+        from gold.gold_medication_adherence gma
+        left join silver.silver_patients sp using (patient_id)
+        where sp.patient_id is null
+    """)
+    results.append(equals(orphans, 0, "orphan patient_ids"))
+
+    # PDC bounds. If min < 0 or max > 1, math is wrong.
+    min_pdc = scalar(con,
+        "select min(pdc) from gold.gold_medication_adherence where pdc is not null")
+    max_pdc = scalar(con,
+        "select max(pdc) from gold.gold_medication_adherence where pdc is not null")
+    results.append(between(min_pdc, 0.0, 0.1, "min PDC (should be near 0)"))
+    results.append(equals(max_pdc, 1.0, "max PDC (should cap at 1.0)"))
+
+    return all(results)
 # ---------- entry point ----------
 
 def main():
@@ -180,6 +234,7 @@ def main():
     checks = [
         check_readmissions(con),
         check_chronic_conditions(con),
+        check_medication_adherence(con),
     ]
 
     print()

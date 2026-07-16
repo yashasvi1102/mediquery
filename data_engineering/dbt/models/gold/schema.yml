@@ -224,8 +224,115 @@ models:
               arguments:
                 values: [true, false]
 
-    # data_tests:
-    #   - dbt_utils.unique_combination_of_columns:
-    #       combination_of_columns:
-    #         - patient_id
-    #         - condition_flag
+    
+  - name: gold_medication_adherence
+    description: |
+      Medication adherence via approximated PDC (Proportion of Days Covered).
+      One row per (patient_id, drug_class).
+
+      Grain: patient + drug_class. A patient on metformin AND a statin has 2 rows.
+
+      Only chronic-condition drug classes (medication_flag IS NOT NULL) are
+      included. Non-chronic drugs (antibiotics, painkillers) have completion,
+      not adherence.
+
+      DD-002 pivot: Synthea observation values are not clinically realistic,
+      so clinical-outcome adherence is meaningless on this data. PDC is the
+      industry-standard fallback. See DD-002 for full rationale.
+
+      Supply is APPROXIMATED — Synthea emits no daysSupply / quantity / refills.
+      Assumed days_supply is class-level (90d for chronic oral maintenance,
+      30d for inhalers, insulin, anticoagulants, opioids) based on published
+      real-world dispensing patterns.
+
+    columns:
+      - name: patient_id
+        description: FHIR Patient resource id.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_patients')
+                field: patient_id
+
+      - name: drug_class
+        description: Therapeutic classification from silver_medications.drug_class.
+        tests:
+          - not_null
+
+      - name: medication_flag
+        description: Chronic condition category (diabetes_drug, antihypertensive, heart_failure_drug, copd_drug).
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [diabetes_drug, antihypertensive, heart_failure_drug, copd_drug]
+
+      - name: first_prescription
+        description: Earliest authored_on for this patient-drug_class pair.
+        tests:
+          - not_null
+
+      - name: last_prescription
+        description: Latest authored_on for this patient-drug_class pair.
+        tests:
+          - not_null
+
+      - name: prescription_count
+        description: Number of MedicationRequest rows for this pair.
+        tests:
+          - not_null
+
+      - name: assumed_days_supply
+        description: |
+          Class-level supply assumption. 90 for chronic oral maintenance,
+          30 for inhalers, insulin, anticoagulants, opioids, and default.
+
+      - name: total_days_supplied
+        description: prescription_count * assumed_days_supply. Uncapped raw supply.
+
+      - name: measurement_period_days
+        description: |
+          Days from first_prescription to observation_end (deceased_date if
+          deceased, current_timestamp if living). Denominator of PDC.
+
+      - name: days_covered
+        description: |
+          least(total_days_supplied, measurement_period_days). No over-coverage.
+          Numerator of PDC.
+
+      - name: pdc
+        description: |
+          Proportion of Days Covered. Range 0.0 to 1.0. NULL when
+          measurement_period_days = 0 (single-fill patient).
+
+      - name: persistence_days
+        description: |
+          Days from first to last prescription. Different from days_covered —
+          measures continuity of prescribing, not coverage density.
+
+      - name: adherence_class
+        description: |
+          CMS-aligned bucket: adherent (PDC >= 0.80), partial (0.50-0.80),
+          non_adherent (< 0.50), single_fill (measurement_period_days = 0).
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [adherent, partial, non_adherent, single_fill]
+      
+      - name: fills_in_window
+        description: Number of prescriptions authored within the 365-day PDC window ending at last_prescription.
+        tests:
+          - not_null
+
+      - name: lifetime_period_days
+        description: |
+          Days from first_prescription to observation_end. Full-history reference
+          only; not used for PDC computation.
+
+      - name: lifetime_coverage_ratio
+        description: |
+          Lifetime coverage. Reference metric — captures long-run persistence but
+          is not CMS PDC. See DD-004 for the distinction. NULL for zero-window
+          patients.

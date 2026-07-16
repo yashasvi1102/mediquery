@@ -396,3 +396,37 @@ encounters. Day 10's 12,223 figure was correct. Simpler query
 
 - validate_gold.py added — same DD-002/DD-003 pattern as validate_silver.py.
   Every quantitative claim in LEARNINGS.md now has an assertion behind it.
+  ## Day 17 — gold_medication_adherence with DD-004
+
+- Built PDC (Proportion of Days Covered) over CMS-standard 365-day window
+  ending at last_prescription. 8,546 patient-drug_class pairs across four
+  chronic drug classes.
+- First attempt used lifetime measurement period. Diagnosed as buggy,
+  rewrote to 365-day window. Rebuild changed almost nothing (diff <= 0.026
+  vs lifetime). My diagnosis was wrong — the problem was one layer deeper.
+- Real finding: PDC is bimodal on Synthea data.
+    64% of pairs: PDC < 0.25
+    20% of pairs: PDC >= 0.80
+    5% in the 0.50-0.80 middle range (real EHR distribution would center here)
+- Root cause: Synthea emits MedicationRequest (prescriptions) but not
+  MedicationDispense (pharmacy fills). Real patients on chronic drugs
+  generate ~12 fills/year even without physician visits. Synthea generates
+  one MedicationRequest per encounter, which may be years apart. This is
+  correct FHIR behavior but breaks PDC.
+- Persistence saves the story: median HTN patient has 3,612 days (9.9 years)
+  between first and last prescription. 91% of HTN pairs persist >= 1 year.
+  Persistence is what Synthea models well; PDC is what it doesn't.
+- DD-004 documents the finding: PDC ships as informational, persistence is
+  the operative signal. Do not invent synthetic fills to make PDC look
+  better — that would defeat the point of catching the limitation.
+- Refactored gold_medication_adherence to expose both pdc and persistence_days
+  as first-class metrics. validate_gold.py enforces the DD-004 bimodal
+  distribution so any future silent drift fails loudly.
+- Interview talking point: "PDC on Synthea is 20-40% adherent depending on
+  class. Real-world published PDC is 60-70%. Investigating the gap
+  surfaced that Synthea models prescriptions but not pharmacy fills.
+  This is the third Synthea limitation I've documented (DD-002 HbA1c,
+  DD-003 SNOMED noise across resources, DD-004 no fill records). The
+  pattern is: Synthea is excellent at encounters and diagnoses, weak on
+  observations and dispensing. Portfolio projects that don't validate
+  against real-world benchmarks miss this."
