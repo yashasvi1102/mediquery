@@ -133,3 +133,99 @@ models:
           - accepted_values:
               arguments:
                 values: [true, false]
+  - name: gold_chronic_conditions
+    description: |
+      Chronic conditions cohort. One row per (patient_id, condition_flag) pair
+      for patients diagnosed with one of the four tracked chronic conditions:
+      diabetes_t2, hypertension, heart_failure, copd.
+
+      Enforces DD-001: only rows with condition_flag IS NOT NULL are included.
+      Patients with multiple chronic conditions produce multiple rows;
+      comorbidity_count aggregates across conditions per patient.
+
+      Grain: one row per (patient_id, condition_flag).
+      A patient with diabetes AND hypertension = 2 rows.
+
+    columns:
+      - name: patient_id
+        description: FHIR Patient resource id.
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_patients')
+                field: patient_id
+
+      - name: condition_flag
+        description: Chronic condition classification from silver_conditions.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [diabetes_t2, hypertension, heart_failure, copd]
+
+      - name: first_onset_date
+        description: Earliest recorded onset for this patient-condition pair.
+        tests:
+          - not_null
+
+      - name: latest_onset_date
+        description: Latest recorded onset date across all Silver rows for this pair.
+
+      - name: diagnosis_row_count
+        description: |
+          Number of Silver condition rows collapsed into this pair. Diabetes T2
+          typically has 2-3 rows per patient (base diagnosis + complications
+          like retinopathy or nephropathy, all sharing the diabetes_t2 flag).
+        tests:
+          - not_null
+
+      - name: gender
+        description: Patient gender from silver_patients (FHIR-native male/female).
+
+      - name: age_years_current
+        description: |
+          Non-deterministic — recomputes daily. Use for cohort filters, not
+          time-based analysis. For time-based analysis use age_at_first_diagnosis.
+
+      - name: age_group
+        description: Age bucket from silver_patients.
+        tests:
+          - not_null
+
+      - name: is_deceased
+        description: True if the patient has a deceased_date.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+
+      - name: age_at_first_diagnosis
+        description: Patient age at first_onset_date. Deterministic.
+
+      - name: years_since_first_diagnosis
+        description: |
+          Years from first_onset_date to deceased_date (or current_timestamp
+          if living). Used for chronic disease duration analysis.
+
+      - name: comorbidity_count
+        description: |
+          Number of distinct chronic condition flags this patient carries.
+          Range 1-4. A patient with diabetes only = 1; diabetes + HTN + CHF = 3.
+        tests:
+          - not_null
+
+      - name: has_comorbidities
+        description: True if comorbidity_count >= 2.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+
+    # data_tests:
+    #   - dbt_utils.unique_combination_of_columns:
+    #       combination_of_columns:
+    #         - patient_id
+    #         - condition_flag

@@ -377,3 +377,22 @@ encounters. Day 10's 12,223 figure was correct. Simpler query
   silver_conditions. It needs to be applied anywhere Synthea uses SNOMED:
   condition codes (DD-001), encounter reasons (Day 15), and likely
   observation categories (Day 18 utilization work).
+  ## Day 16 — gold_chronic_conditions
+
+- Grain: one row per (patient_id, condition_flag) pair. Diabetes + HTN
+  patient = 2 rows. Downstream cohort filters trivial.
+- Patient counts match Day 10 Silver exactly: 1,731 / 2,665 / 321 / 164.
+  DD-001 filter (condition_flag IS NOT NULL) doing real work.
+- Max comorbidity_count = 3. No patient in cohort has all 4 chronic flags.
+- Prevalence vs real-world US benchmarks:
+    Diabetes T2:    15.1% cohort  vs 11.6% US adults (slightly high — MA over-samples older)
+    Hypertension:   23.3% cohort  vs 47%   US adults (Synthea under-diagnoses)
+    Heart failure:   2.8% cohort  vs 2.4%  US adults (aligned)
+    COPD:            1.4% cohort  vs 6.4%  US adults 40+ (Synthea under-diagnoses)
+  HTN and COPD gaps are Synthea limitations, not model bugs. Log; don't fix.
+
+- dbt-utils not installed. (patient_id, condition_flag) uniqueness enforced
+  in tests/validate_gold.py instead. Day 21 cleanup: install dbt-utils.
+
+- validate_gold.py added — same DD-002/DD-003 pattern as validate_silver.py.
+  Every quantitative claim in LEARNINGS.md now has an assertion behind it.
