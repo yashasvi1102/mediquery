@@ -279,6 +279,73 @@ def check_provider_volume(con):
                            "max provider encounters (top provider volume)"))
 
     return all(results)
+def check_anomaly_injection(con):
+    print("\n== gold.ground_truth_anomalies (Day 20 injection) ==")
+    results = []
+
+    # Total injected count matches Day 20 targets.
+    total = scalar(con, "select count(*) from gold.ground_truth_anomalies")
+    results.append(equals(total, 55, "total ground_truth rows (30 warfarin + 25 HF)"))
+
+    warfarin_gt = scalar(con, """
+        select count(*) from gold.ground_truth_anomalies
+        where anomaly_type = 'warfarin_antiplatelet_no_monitoring'
+    """)
+    results.append(equals(warfarin_gt, 30, "warfarin ground_truth count"))
+
+    hf_gt = scalar(con, """
+        select count(*) from gold.ground_truth_anomalies
+        where anomaly_type = 'heart_failure_early_readmission'
+    """)
+    results.append(equals(hf_gt, 25, "HF ground_truth count"))
+
+    # Post-injection detection queries must return baseline + injected.
+    warfarin_detected = scalar(con, """
+        with warfarin_patients as (
+            select patient_id, authored_on as warfarin_start
+            from silver.silver_medications
+            where medication_display ilike '%warfarin%'
+        ),
+        concurrent as (
+            select w.patient_id
+            from warfarin_patients w
+            inner join silver.silver_medications m
+                on w.patient_id = m.patient_id
+               and (
+                    m.medication_display ilike '%aspirin%'
+                    or m.drug_class = 'nsaid'
+               )
+               and abs(datediff('day', w.warfarin_start, m.authored_on)) <= 30
+        )
+        select count(distinct patient_id) from concurrent
+    """)
+    results.append(equals(warfarin_detected, 41,
+                          "warfarin detection (baseline 11 + injected 30)"))
+
+    hf_detected = scalar(con, """
+        select count(*)
+        from gold.gold_readmissions
+        where is_30_day_readmission = true
+          and days_between <= 7
+          and is_likely_planned = false
+          and (
+            index_reason_display ilike '%heart failure%'
+            or index_reason_display ilike '%congestive%'
+          )
+    """)
+    results.append(equals(hf_detected, 30,
+                          "HF 7-day detection (baseline 5 + injected 25)"))
+
+    # Every injected patient must exist in silver_patients (integrity check).
+    orphans = scalar(con, """
+        select count(*)
+        from gold.ground_truth_anomalies gta
+        left join silver.silver_patients sp using (patient_id)
+        where sp.patient_id is null
+    """)
+    results.append(equals(orphans, 0, "orphan ground_truth patient_ids"))
+
+    return all(results)
 # ---------- entry point ----------
 
 def main():
@@ -291,6 +358,8 @@ def main():
         check_medication_adherence(con),
         check_utilization(con),
         check_provider_volume(con),
+        check_anomaly_injection(con),
+        
     ]
 
     print()

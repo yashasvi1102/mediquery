@@ -1,6 +1,3 @@
--- gold schema tables that are outside the Medallion transformation flow.
--- Populated by anomaly_injector.py, not by dbt.
-
 create schema if not exists gold;
 
 create table if not exists gold.ground_truth_anomalies (

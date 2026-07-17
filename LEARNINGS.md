@@ -478,3 +478,24 @@ encounters. Day 10's 12,223 figure was correct. Simpler query
   4 anomalies to 2 to produce measurable precision/recall. Honest scope
   reset beats padded scope. Ships 2 with 3-5x signal:noise > 4 with poor.
 - Zero injector code today. Design first, code Day 20.
+## Day 20 — Anomaly injector implementation
+
+- Created gold.ground_truth_anomalies table via data_engineering/schema/gold_schema.sql.
+- Wrote data_generation/anomaly_injector.py with two injector functions:
+    inject_warfarin_coprescription: 30 patients, warfarin + aspirin/ibuprofen
+    inject_hf_early_readmission:    25 patients, new inpatient encounter + matching Condition row
+- Both injectors:
+    - attach to REAL existing encounters (warfarin uses patient's most recent AMB)
+    - use realistic RxNorm codes and SNOMED codes sampled from actual Silver rows
+    - use IDs prefixed 'anomaly_' so they're greppable but FHIR-valid VARCHAR
+    - are idempotent via delete-where-load_batch_id before insert
+    - run inside a single transaction with rollback on failure
+- HF injector also inserts matching silver_conditions row so downstream joins
+  (gold_provider_volume.top_clinical_category etc.) remain consistent.
+- Reproducibility: random.seed(20260720) locked so same patients selected on rerun.
+- Post-injection counts match framework predictions EXACTLY:
+    Warfarin detection: 11 baseline + 30 injected = 41 (matches)
+    HF 7-day detection: 5 baseline + 25 injected = 30 (matches)
+- validate_gold.py now has 6 more assertions locking in post-injection counts.
+  Any silent Silver rebuild that drops injected rows fails loudly.
+- DeprecationWarning on datetime.utcnow() — cleanup task for Day 21.
