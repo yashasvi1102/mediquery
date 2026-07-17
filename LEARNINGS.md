@@ -499,3 +499,47 @@ encounters. Day 10's 12,223 figure was correct. Simpler query
 - validate_gold.py now has 6 more assertions locking in post-injection counts.
   Any silent Silver rebuild that drops injected rows fails loudly.
 - DeprecationWarning on datetime.utcnow() — cleanup task for Day 21.
+## Week 3 close (Day 21)
+
+Delivered:
+- 5 Gold models: readmissions, chronic_conditions, medication_adherence,
+  utilization, provider_volume
+- 3 new DDs: DD-003 (SNOMED classification crosses resource boundaries),
+  DD-004 (Synthea has no MedicationDispense stream), DD-005 (2 of 4
+  anomaly types dropped after baseline analysis)
+- Anomaly injection framework: 30 warfarin + 25 HF injected. Post-injection
+  detection = 41 and 30, matching baseline + injected exactly.
+- validate_gold.py: 34 assertions locking every quantitative claim
+- Test counts: 37 Silver dbt + 70 Gold dbt + 34 Python distribution
+- Cross-layer reconciliation exact: 11,446 patients / 669,189 encounters
+  / 1,089 providers all trace Silver → Gold with zero drift
+
+Story arc:
+- Week 1 established Bronze + FHIR literacy
+- Week 2 established Silver + first two DD findings (DD-001 SNOMED noise,
+  DD-002 broken observation values)
+- Week 3 established Gold + three more DD findings, all rooted in Synthea
+  data-generation limitations rather than model bugs
+
+Interview through-line: 5 documented Synthea limitations + 5 Gold models
+that gracefully degrade in the presence of those limitations. That's the
+"safety-first" engineering the project claimed from Day 1. Now backed by
+artifacts.
+
+Week 3 gotchas surfaced and logged:
+- silver_medications.drug_class taxonomy missing anticoagulant and
+  antiplatelet classes. Warfarin currently sits under 'other'. Detection
+  works via medication_display but the taxonomy gap is real.
+- gold_provider_volume.top_clinical_category is uniform (all 'disorder').
+  Would need clinical_subcategory on silver_conditions to produce signal.
+- DeprecationWarning on datetime.utcnow() in anomaly_injector.py — trivial
+  fix, deferred.
+
+All three logged in README "Cleanup backlog" section for Week 4+.
+
+Ready for Week 4 (Neo4j). Framework:
+- Nodes: Patient, Encounter, Condition, Medication, Provider
+- Edges: HAS_ENCOUNTER, DIAGNOSED_WITH, PRESCRIBED, OBSERVED, TREATED_BY
+- Ingestion from Silver (not Gold — graph queries need atomic clinical events,
+  not aggregations)
+- Neo4j Aura free tier
