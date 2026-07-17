@@ -1,17 +1,52 @@
 ﻿# MediQuery
 
-**MediQuery** is a 6-week clinical analytics build. Synthetic FHIR patient
-data flows through a DuckDB Medallion lakehouse (built), a Neo4j knowledge
-graph (Week 4), and a GraphRAG agent with mandatory citation guards (Week 5).
-Currently at end of Week 2 — Silver layer complete with 33 dbt tests and a
-Python distribution-validation suite catching two synthetic-data quality
-issues Synthea documentation doesn't mention.
+**MediQuery** is a 6-week clinical analytics build. Synthetic FHIR patient data
+flows through a DuckDB Medallion lakehouse (Weeks 1-3, complete), a Neo4j
+knowledge graph (Week 4), and a GraphRAG agent with mandatory citation guards
+(Week 5). Currently at end of Week 3 — Bronze + Silver + 5 Gold models built,
+with an anomaly injection benchmark and a validation suite locking every
+quantitative claim in the project's design docs.
+
+The project's opinionated stance: **synthetic healthcare data has documented
+limitations that portfolio tutorials skip.** This project systematically
+audits Synthea against real-world clinical benchmarks and documents five
+limitations, each of which changes how a downstream model has to be designed.
 
 **Stack:** Synthea · Python · DuckDB · dbt · Neo4j · LangChain · Ollama · Streamlit
 
+## Status
+
+**Days 1-20 of 42 complete.**
+
+- Bronze + Silver + 5 Gold dbt models built.
+- 37 Silver dbt tests + 70 Gold dbt tests + 34 Python distribution assertions passing.
+- 5 documented design decisions (DD-001 through DD-005) covering Synthea
+  data-quality limitations and how each model works around them.
+- Anomaly injection framework operational: 30 warfarin coprescriptions
+  + 25 HF 7-day readmissions injected. Post-injection detection = 41 and 30,
+  matching pre-injection baseline + injected counts exactly.
+
+## What's built
+
+| Layer | Details | Rows | Tests |
+|---|---|---|---|
+| Synthea | 11,446 Massachusetts synthetic patients | — | — |
+| FHIR Parser | 5 resource types; medicationReference fallback recovers 202K rows | 1.67M | Smoke tests in repo |
+| Bronze | DuckDB `read_parquet()` load, ~5s | 1.67M | Row-count assertions |
+| Silver | 5 dbt models; SNOMED classifier; therapeutic cohort flags; plausibility flags | 10.0M+ | 33 dbt + 14 Python |
+| Gold | 5 dbt models; readmissions, chronic conditions, PDC adherence, per-patient utilization, per-provider volume | ~30K | 71 dbt + 21 Python |
+| Anomaly Benchmark | 2 injected anomaly types; ground_truth_anomalies table | 55 injected | 6 Python assertions |
+
+Cross-layer reconciliation is exact: 11,446 patients / 669,189 encounters / 1,089
+providers all trace Silver → Gold with zero drift, enforced by Python assertions
+in `tests/validate_gold.py`.
+
 ## The clinical data problem this project addresses
 
-Most healthcare data tutorials treat the FHIR `Condition` resource as a list of diseases. It's not. Running a top-10 conditions query on 11,446 synthetic patients revealed that **7 of the 10 most common "conditions" are not clinical disorders** — they're social factors (stress, social isolation), administrative events (medication review due), or employment status.
+Most healthcare data tutorials treat the FHIR `Condition` resource as a list of
+diseases. It's not. Running a top-10 conditions query on 11,446 synthetic
+patients revealed that **7 of the 10 most common "conditions" are not clinical
+disorders** — they're social factors, administrative events, or employment status.
 
 | Rank | Condition | Count | Type |
 |---|---|---|---|
@@ -26,92 +61,89 @@ Most healthcare data tutorials treat the FHIR `Condition` resource as a list of 
 | 9 | Not in labor force (finding) | 10,431 | Social factor |
 | 10 | Gingival disease (disorder) | 8,951 | Clinical |
 
-A naive "patients with conditions" query inflates cohorts by counting employed people as sick. The Silver layer separates them using SNOMED hierarchy classification: **only 32.7% of 414,851 conditions are actual disorders.** The remaining 67% are findings (45.4%) and situations (22%). Cohort queries hit `is_billable_diagnosis` or `condition_flag`, never raw SNOMED codes.
+A naive "patients with conditions" query inflates cohorts by counting employed
+people as sick. The Silver layer separates them using SNOMED hierarchy
+classification: **only 32.7% of 414,851 conditions are actual disorders.**
+Cohort queries in Gold hit `is_billable_diagnosis` or `condition_flag` by
+convention, never raw SNOMED codes.
 
-![Top conditions query](docs/week1_query_results.png)
+Full write-up: `docs/design_decisions.md` DD-001.
 
-## Status
+## Five documented Synthea limitations
 
-**Days 1–13 of 42 complete.** Bronze + Silver layers built. 33 dbt tests and 14 Python distribution assertions passing.
+Each finding surfaced during model construction and forced a design change.
 
-## What's built so far
-
-- Synthea generating 11,446 synthetic Massachusetts patient bundles
-- FHIR parser handling 5 resource types (Patient, Encounter, Condition, MedicationRequest, Observation), including the `medicationReference` fallback that affects 35% of medication rows
-- Bronze loader using DuckDB's native `read_parquet()` — 1.67M rows in ~5 seconds
-- Silver layer with 5 dbt models:
-  - `silver_conditions` with SNOMED hierarchy classification (disorder / finding / situation / unknown)
-  - `silver_medications` with therapeutic cohort flags and 15-class drug classification
-  - `silver_observations` with `is_plausible_value` and `is_critical_value` flags
-  - All foreign-key relationships against `silver_patients` verified (zero orphans)
-- 33 dbt schema tests passing (unique, not_null, accepted_values, relationships)
-- Python validation suite enforcing every quantitative claim in `docs/design_decisions.md`
-
-## Data quality
-
-Two layers of validation on the silver tier.
-
-**dbt tests** cover schema invariants: primary key uniqueness, not-null constraints, enum values, foreign keys. Run via `dbt test --select silver`.
-
-**Python validation suite** (`tests/validate_silver.py`) covers distribution claims that dbt cannot:
-
-- DD-001 SNOMED classification: disorder share 0.30–0.36 (actual 0.327), finding share 0.42–0.48 (actual 0.454)
-- DD-002 Synthea HbA1c plausibility: 49% of HbA1c readings are clinically impossible (<4.0%, incompatible with life). Documented and enforced so downstream analytics opt in via `is_plausible_value`
-- Cohort sanity: T2DM cohort 1,700–1,760 patients (actual 1,731); T2DM diabetes-drug treatment rate 0.62–0.72 (actual 0.675)
-
-Run via `python -m tests.validate_silver`. Distribution drift fails by name, not silently.
-
-![dbt lineage: bronze sources to silver models](docs/lineage_silver.png)
-
-## Silver layer row counts
-
-| Table | Rows | Notes |
+| DD | Finding | Model impact |
 |---|---|---|
-| silver_patients | 11,446 | Deduplicated by load_timestamp |
-| silver_encounters | 669,189 | FHIR class codes mapped to readable types |
-| silver_conditions | 414,851 | 32.7% disorders, 45.4% findings, 21.7% situations |
-| silver_medications | 574,828 | medicationReference fallback fix recovered 202,708 rows |
-| silver_observations | 8,348,416 | ~49% of HbA1c readings flagged implausible |
+| DD-001 | 67% of FHIR Conditions are SDOH or admin events, not diseases | Silver conditions classifier; Gold filters via `is_billable_diagnosis` |
+| DD-002 | 49% of HbA1c readings are clinically impossible (< 4.0%); diagnosed hypertensives show no BP separation from controls | silver_observations exposes `is_plausible_value`; medication adherence pivoted from clinical-outcome to prescription-pattern |
+| DD-003 | SNOMED-noise pattern crosses resource boundaries — Encounter.reasonCode also inflated by history/procedure codes | gold_readmissions applies same classifier to `reason_display`; drops 45% → 19% 30-day rate through overlap + planned + clinical filters |
+| DD-004 | Synthea emits MedicationRequest but not MedicationDispense; PDC bimodal (64% < 0.25, 20% ≥ 0.80) | gold_medication_adherence ships PDC as informational; persistence_days is the operative adherence signal |
+| DD-005 | 2 of 4 anomaly types dropped after baseline analysis (baselines 60x and 19x injection targets) | Anomaly benchmark ships 2 clean measurements (warfarin coprescription, HF early readmission) instead of 4 noisy ones |
+
+Full write-ups: `docs/design_decisions.md`.
+
+## Readmission methodology: 45% → 19% via three filters
+
+`gold_readmissions` computes CMS-aligned 30-day readmission pairs from
+`silver_encounters`. Raw Synthea produces a 45.23% 30-day rate — 3x higher than
+real-world CMS all-cause (~15%). Three orthogonal filters bring it into range:
+
+| Filter | 30-day rate | Why |
+|---|---|---|
+| Raw pairs (no filter) | 45.23% | Includes overlapping encounters and oncology follow-ups |
+| Overlap exclusion (days_between >= 0) | — | Synthea generates concurrent long-stay + acute encounters that aren't real readmissions |
+| + Planned admissions excluded (`is_likely_planned = false`) | — | 63% of raw 30-day hits were lung-cancer TNM staging admissions |
+| + Clinical-reason filter (`readmission_reason_is_clinical = true`) | **19.34%** | Removes history codes ("History of CABG") and procedure codes ("Patient transfer to SNF") that Synthea uses as encounter reasons |
+
+Real-world CMS Hospital-Wide Readmission is ~15%. Ours lands at 19.34%.
+Top clinical drivers after filtering: heart failure, COVID-19, MI, aortic
+valve disease. Real acute readmission patterns.
+
+## Data-quality validation
+
+Two layers.
+
+**dbt tests** cover schema invariants: primary key uniqueness, not-null, enum
+values, foreign keys. 33 Silver + 71 Gold tests. Run via `dbt test`.
+
+**Python distribution suite** (`tests/validate_silver.py` and
+`tests/validate_gold.py`) covers claims dbt cannot enforce — distribution
+shape, cross-layer reconciliation, DD-specific quantitative constraints.
+35 assertions total. Run via `python -m tests.validate_silver` and
+`python -m tests.validate_gold`.
+
+Every quantitative claim in this README and in `docs/design_decisions.md`
+is reproducible from these two commands. Distribution drift fails by name,
+not silently.
+
+## Silver + Gold row counts
+
+| Table | Rows |
+|---|---|
+| silver_patients | 11,446 |
+| silver_encounters | 669,189 |
+| silver_conditions | 414,851 |
+| silver_medications | 574,828 |
+| silver_observations | 8,348,416 |
+| gold_readmissions | 4,860 |
+| gold_chronic_conditions | 4,881 |
+| gold_medication_adherence | 8,546 |
+| gold_utilization | 11,446 |
+| gold_provider_volume | 1,089 |
+| gold.ground_truth_anomalies | 55 |
 
 ## Stack rationale
 
-- **DuckDB** instead of Snowflake — Snowflake's 30-day trial expires mid-project. DuckDB gives the same SQL surface, same dbt workflow, indefinite demo lifetime. SQL stays portable.
-- **Ollama** instead of OpenAI API — local LLM, no API costs, no rate limits.
-- **dbt** for Silver/Gold transformations — industry-standard analytics engineering tool.
-- **Neo4j Aura** free tier for the clinical knowledge graph.
+- **DuckDB instead of Snowflake.** Same SQL, same dbt workflow, portable to
+  Snowflake in a day. Chose local execution so the demo stays reproducible
+  after any trial window closes. Trade-off is losing multi-user concurrency
+  and cloud-native features — neither needed at this scale.
+- **Ollama instead of OpenAI API.** Local LLM, no API costs, no rate limits.
+- **dbt** for Silver/Gold transformations — industry-standard analytics
+  engineering tool.
+- **Neo4j Aura** free tier for the Week 4 clinical knowledge graph.
 
-## Roadmap
-
-- ✅ Week 1: FHIR ingestion + Bronze layer
-- ✅ Week 2: dbt Silver transformations + tests + validation suite
-- 🚧 Week 3: Gold clinical metrics (readmissions, chronic conditions, adherence)
-- ⬜ Week 4: Neo4j knowledge graph
-- ⬜ Week 5: GraphRAG agent with citation guards
-- ⬜ Week 6: Multi-persona dashboard + anomaly detection benchmarks
-
-## Synthea doesn't link diagnoses to observation values
-
-After building silver_observations, ran sanity checks. Two findings that
-change how the Gold layer has to be designed:
-
-| Check | Expected | Actual |
-|---|---|---|
-| HbA1c < 4.0% (incompatible with life) | <1% of readings | **49%** (44,108 of 90,453) |
-| Avg HbA1c, T2DM patients (post-filter) | 7–8% | 5.6% |
-| Systolic BP gap, hypertensive vs control | 15–25 mmHg | **0.1 mmHg** |
-
-Synthea generates diagnosis codes and encounter workflows but does not
-generate correlated observation values. Diagnosed hypertensives don't have
-elevated BP. Diagnosed diabetics don't have elevated HbA1c.
-
-**Consequences for the build:**
-- silver_observations exposes `is_plausible_value` — downstream models opt in.
-- Day 17 medication adherence pivots from clinical outcomes (HbA1c drop, BP
-  drop) to prescription-pattern PDC (Proportion of Days Covered) — the
-  industry-standard approach when lab data is unreliable.
-- Day 19 anomaly framework drops the "HbA1c spike without med change" injector.
-
-Full write-up: `docs/design_decisions.md` DD-002.
 ## Quickstart
 
 Requires Python 3.13, Java 17 (for Synthea), ~2 GB free disk.
@@ -122,64 +154,52 @@ cd mediquery
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-# Generate synthetic FHIR data (skip if using included sample)
+# Generate synthetic FHIR data (or skip if included sample used)
 bash data_generation/run_synthea.sh 1000
 
-# Load Bronze + build Silver
+# Load Bronze
 python data_generation/load_to_bronze.py
-cd data_engineering/dbt && dbt run && dbt test
 
-# Validate distributions
-cd ../.. && python -m tests.validate_silver
+# Build Silver + Gold
+cd data_engineering/dbt
+dbt run
+dbt test
+
+# Validate distributions (Silver + Gold)
+cd ../..
+python -m tests.validate_silver
+python -m tests.validate_gold
+
+# Inject anomalies (optional — for Week 6 benchmark work)
+python -m data_generation.anomaly_injector
 ```
 
-Actual commands vary — replace with whatever your repo uses. If you don't have `run_synthea.sh`, name whatever script does the equivalent. Don't fake commands you can't run.
+## Roadmap
 
----
+- ✅ Week 1: FHIR ingestion + Bronze layer
+- ✅ Week 2: Silver layer + dbt tests + Python distribution suite
+- ✅ Week 3: 5 Gold models + anomaly injection framework + DD-003/004/005
+- ⬜ Week 4: Neo4j clinical knowledge graph
+- ⬜ Week 5: GraphRAG agent with citation guards
+- ⬜ Week 6: Multi-persona dashboard + anomaly detection benchmark
 
-### Task 6 — Fix the emoji roadmap (2 min)
+## Design decisions
 
-Change Week 2 from ✅ to 🚧. You're not done with Week 2 until you finish this script. Update to ✅ at the end of Day 14, not before.
+See `docs/design_decisions.md` for full write-ups. Each DD includes context,
+findings, decision, consequences.
 
----
+- DD-001: SNOMED hierarchy classification in Silver Conditions
+- DD-002: Synthea's lack of clinical realism in observation values
+- DD-003: SNOMED classification pattern applies across FHIR resources, not just Conditions
+- DD-004: Synthea prescriptions are authorization events, not dispensing records
+- DD-005: 2 of 4 anomaly types dropped after baseline analysis
 
-### Task 7 — Compress the "What's built so far" bullets (15 min)
+## Cleanup backlog (Week 4+)
 
-Current version is 6 bullets, most 2 lines each. Convert to this table:
-
-```markdown
-## What's built
-
-| Layer | Details | Rows | Tests |
-|---|---|---|---|
-| Synthea | 11,446 Massachusetts synthetic patients | — | — |
-| FHIR Parser | 5 resource types; medicationReference fallback recovers 202K rows | 1.67M | Smoke tests in repo |
-| Bronze | DuckDB `read_parquet()` load, ~5s | 1.67M | Row-count assertions |
-| Silver | 5 dbt models; SNOMED classifier; therapeutic cohort flags; plausibility flags | 10.0M+ | 33 dbt + 14 Python |
-```
-
-Recruiters skim. Tables force skim to land on numbers.
-
----
-
-### Task 8 — Answer your own unresolved question (10 min)
-
-You wrote: *"Cohort queries hit `is_billable_diagnosis` or `condition_flag`, never raw SNOMED codes."*
-
-Decide now: is this enforced or is it a convention? Options:
-
-- **Convention only** → add "(convention followed in Gold models — Week 3)" to the sentence.
-- **Enforced by dbt exposure or a linter** → name it.
-- **Not enforced yet, planned** → move to Roadmap.
-
-Pick one. Don't leave the ambiguity in the README.
-
----
-
-### Task 9 — Draft the LinkedIn post (25 min, DON'T PUBLISH)
-
-Draft it, save it in `docs/linkedin_week2.md`, sleep on it. Publish Monday morning when the algorithm is better anyway.
-
-Hook: the 49% HbA1c number, not the 67% SNOMED number. Reasoning: SNOMED is a FHIR-literacy signal; HbA1c is a "catches problems others miss" signal. Second one is rarer and better paid.
-
-Rough structure:
+- Add `dbt-utils` package for `unique_combination_of_columns` tests currently
+  enforced in Python
+- Extend silver_medications drug_class taxonomy with `anticoagulant` and
+  `antiplatelet` classes (warfarin currently sits under `other`)
+- Extend silver_conditions with `clinical_subcategory` (disease-system-level
+  classification for gold_provider_volume top-category signal)
+- Replace `datetime.utcnow()` with `datetime.now(datetime.UTC)`
