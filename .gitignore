@@ -46,3 +46,10 @@ data_engineering/dbt/target/
 data_engineering/dbt/dbt_packages/
 data_engineering/dbt/logs/
 data_engineering/dbt/.user.yml
+# Build artifacts
+__pycache__/
+*.pyc
+data_engineering/dbt/target/
+data_engineering/dbt/logs/
+*.duckdb
+
