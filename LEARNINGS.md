@@ -743,3 +743,60 @@ Ready for Week 4 (Neo4j). Framework:
   as a pre-filter but can override the decision with full conversational context.
 - Phase 2 complete. Three days ahead of roadmap schedule (finished Day 28,
   roadmap had Phase 2 through Day 32).
+  ## Day 29 — Ollama setup + Cypher generation quality test
+
+- Installed Ollama with qwen2.5-coder:7b (4.7GB, fits in 14GB RAM alongside
+  Docker/Neo4j). Code-specialized model chosen over general-purpose because
+  Cypher is structured like SQL.
+- DD-006 decided: Ollama local over OpenAI/Claude API. Same philosophy as
+  DuckDB and Docker Neo4j — free, no expiry, fully offline demo. Tradeoff
+  is weaker Cypher generation requiring more few-shot examples.
+- Cypher quality test results:
+    - WITHOUT schema: completely wrong. Hallucinated property names
+      ({name: 'Diabetes'}), nonexistent relationship types (INPATIENT_ENCOUNTER),
+      and referenced undefined variables. Unusable.
+    - WITH schema injected: valid, executable Cypher on first try. Correct
+      condition_flag value, correct is_inpatient filter, proper WITH/count/WHERE
+      aggregation pattern. Only cosmetic issue (unused variable alias).
+- Key finding: schema injection is the critical factor, not model size.
+  A 7B model with the right schema outperforms a hypothetical larger model
+  without it. Phase 3 agent MUST inject the full graph schema into every
+  prompt — this is non-negotiable.
+- Few-shot examples still needed for complex patterns: temporal windows
+  (readmission within 30 days), multi-hop joins (patient → encounter →
+  medication + condition), and anomaly detection queries. Simple count/filter
+  queries work zero-shot with schema injection.
+- langchain-ollama installed for Phase 3 integration.
+## Day 30 — GraphRAG agent: basic NL → Cypher → answer pipeline
+
+- Built two-step LangChain chain: (1) LLM generates Cypher from question +
+  schema, (2) execute against Neo4j, (3) LLM synthesizes answer from results.
+- Schema injection is mandatory (DD-006 confirmed). Without schema, the 7B
+  model hallucinated property names and relationship types. With schema,
+  simple queries worked zero-shot.
+- 8-query test suite: 5 passed, 1 partial, 2 failed.
+  Failures: multi-hop path (Patient→Encounter→Medication), exact string
+  match instead of CONTAINS, counting patients instead of encounters.
+- Auto-retry mechanism: if Cypher fails, error is fed back to the LLM for
+  correction. Up to 2 retries.
+- Latency: 15-30 seconds per query (two LLM calls on CPU). Acceptable for
+  a local demo — the "AI thinking" delay is expected by users.
+
+## Day 31 — Few-shot examples fix all Cypher generation failures
+
+- Added 10 few-shot Cypher examples targeting Day 30's failure patterns:
+  multi-hop medication paths, CONTAINS for drug names, encounter counts
+  vs patient counts, condition display vs condition_flag, temporal
+  readmission queries, comorbidity queries.
+- Reran same 8-query test suite: 8/8 pass. All three failures fixed.
+- Key few-shot patterns that made the difference:
+    1. Explicit PRESCRIBED path: Patient→Encounter→Medication (not Patient→Medication)
+    2. CONTAINS for medication names (Synthea stores "Warfarin Sodium 5 MG
+       Oral Tablet", not "warfarin")
+    3. clinical_category = 'disorder' + display for general condition queries
+       (condition_flag is NULL for most conditions)
+- Few-shot examples stored in cypher_few_shots.py, imported by the agent.
+  Adding a new example is one dict append — no prompt rewriting.
+- DD-006 fully validated: 7B Ollama model + schema injection + 10 few-shot
+  examples = 100% on basic query suite. Complex queries (temporal windows,
+  anomaly detection) still untested — Day 38.

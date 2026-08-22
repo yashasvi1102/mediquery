@@ -247,3 +247,57 @@ models correctly.
   undetectable. Better to measure 2 things well than 4 things poorly."
 - If Bronze is ever rebuilt with MedicationDispense parsing (Week 4+
   extension), dropped anomalies become detectable and can be reinstated.
+  
+## DD-006: LLM choice — Ollama local over cloud APIs
+
+**Date:** Day 29
+**Status:** Accepted
+
+### Context
+Phase 3 GraphRAG agent needs an LLM for NL → Cypher generation and
+answer synthesis. Three options evaluated: OpenAI GPT-4o (~$5-15 dev
+cost, best Cypher quality), Claude API (similar), Ollama local (free,
+offline, weaker Cypher).
+
+### Decision
+Ollama with qwen2.5-coder:7b. Same infrastructure philosophy as DuckDB
+(Day 1) and Docker Neo4j (Day 22): free, no expiry, no API key in .env,
+fully offline demo. Anyone cloning the repo can run the full stack with
+zero accounts or credits.
+
+### Tradeoff
+7B model generates worse Cypher than GPT-4o on complex queries. Mitigated
+by mandatory schema injection (transforms quality from unusable to correct
+on tested patterns) and few-shot examples for complex query types.
+If Cypher accuracy proves insufficient for the demo, can switch to
+OpenAI as a fallback profile without architectural changes — LangChain
+abstracts the LLM provider.
+
+### Consequences
+- Every agent prompt must include the full graph schema
+- 8-12 few-shot Cypher examples required (vs ~4 for GPT-4o)
+- Demo runs fully offline on any machine with 14GB+ RAM
+- No API cost, no rate limits, no key rotation
+
+## DD-007: Template-based patient summaries over LLM-generated
+
+**Date:** Day 26
+**Status:** Accepted
+
+### Context
+Chroma needs text documents to embed. Two approaches: template-based
+(Python script generates structured summaries from Silver data) or
+LLM-generated (feed structured data to LLM, get narrative summaries).
+
+### Decision
+Template-based. Deterministic, free, reproducible. Summary generation
+runs in 0.5 seconds for 11,446 patients with zero API calls.
+
+### Consequences
+- Summaries are structured and consistent but not narrative-quality
+- Semantic search works well for demographic + condition matching
+  (distances 0.40-0.48 on test queries)
+- Weaker on abstract clinical concepts ("worsening symptoms") because
+  templates don't capture clinical trajectory
+- If narrative quality matters later, can re-generate with LLM as a
+  one-time batch job without changing the embedding pipeline

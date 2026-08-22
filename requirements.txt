@@ -65,3 +65,7 @@ chromadb>=0.6.0
 sentence-transformers>=3.4.0
 
 langchain-ollama
+
+langchain
+langchain-core
+langchain-community
