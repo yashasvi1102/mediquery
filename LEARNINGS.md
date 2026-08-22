@@ -678,3 +678,47 @@ Ready for Week 4 (Neo4j). Framework:
 - Graph ingestion complete (Days 22-25). Phase 1 of the roadmap done.
 - Total ingestion time across 4 days: ~5 minutes of compute.
   Development time was in schema design, validation, and debugging.
+## Day 26 — Patient summary generation
+
+- Generated 11,446 template-based patient summaries from DuckDB Silver.
+  Template combines demographics, conditions, medications, and encounter
+  history into natural language text. DD-007: template-based over LLM-generated
+  — deterministic, free, reproducible.
+- Summary stats: min 100 chars, median 789, max 1,793, mean 775.
+  Summaries are dense enough for semantic search but short enough to
+  embed efficiently.
+- 247 patients have no medications (11,446 patients vs 11,199 medication
+  aggregates). These are likely pediatric patients with encounters but
+  no prescriptions. LEFT JOIN preserves them with NULL medication fields.
+- Condition list truncated to top 8 disorders per patient to keep summaries
+  focused. Full list available via graph traversal.
+- Output: data_generation/parsed/patient_summaries.parquet (2.3 MB).
+- GOTCHA: pandas NA doesn't support Python `or` operator. `row.get("age_at_death")
+  or row.get("age_years_current")` throws "boolean value of NA is ambiguous."
+  Fix: explicit `pd.notna()` check. Same class of bug as the Neo4j date()
+  parsing issue on Day 23 — integration seams between libraries surface
+  type mismatches.
+
+## Day 27 — Chroma vector store
+
+- Embedded 11,446 patient summaries into Chroma using all-MiniLM-L6-v2
+  (384-dimensional embeddings, ~90 MB model, runs locally, no API key).
+- Embedding took 288.7 seconds (~5 minutes) for 11K documents. Batch
+  size 500. Persistent storage at chroma_db/ (gitignored).
+- Semantic search verification with 5 test queries:
+    - "elderly diabetic with heart problems" → returned patients with
+      chronic conditions and cardiac history. Distances 0.40-0.43. Good.
+    - "young patient with frequent emergency visits" → returned 1-4 year
+      olds with ER encounters. Good.
+    - "multiple chronic conditions and many medications" → returned patients
+      with 4+ conditions and polypharmacy. Good.
+    - "deceased patient with cancer history" → returned deceased infants,
+      not cancer patients. Model weighted "deceased" over "cancer." Weak
+      result but acceptable — cancer-specific queries route to Cypher
+      (structured), not vector search.
+    - "hypertension and kidney disease" → returned older patients with
+      HTN and renal diagnoses. Good.
+- GOTCHA: Chroma raises `NotFoundError` not `ValueError` when deleting
+  a non-existent collection. Catch `Exception` broadly for idempotency.
+- HuggingFace symlink warning on Windows is cosmetic — caching works,
+  just uses more disk space. Can suppress with HF_HUB_DISABLE_SYMLINKS_WARNING.
