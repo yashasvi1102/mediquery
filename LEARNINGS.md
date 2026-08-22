@@ -722,3 +722,24 @@ Ready for Week 4 (Neo4j). Framework:
   a non-existent collection. Catch `Exception` broadly for idempotency.
 - HuggingFace symlink warning on Windows is cosmetic — caching works,
   just uses more disk space. Can suppress with HF_HUB_DISABLE_SYMLINKS_WARNING.
+  ## Day 28 — Query router
+
+- Built regex-based query router that classifies NL queries into four
+  categories: structured (→ Cypher), semantic (→ Chroma), hybrid (→ both),
+  off_topic (→ refuse).
+- 22-query test suite: 20/21 pass (95%). Single mismatch is "Tell me about
+  diabetes" classified as hybrid instead of structured — genuinely ambiguous,
+  not worth special-casing.
+- Router uses additive confidence scoring: multiple matching patterns increase
+  confidence. A query matching "how many" + "diabetes" + "over 65" scores
+  0.9 structured vs a single keyword match at 0.2.
+- Design decision: default to structured when no signals match. Cypher returns
+  empty results gracefully; Chroma returns irrelevant results. Structured
+  fail-closed is safer for the citation system.
+- Off-topic detection catches prompt injection ("ignore previous instructions")
+  at conf=1.3. Basic but sufficient — the FastAPI RBAC layer (Phase 4) is the
+  real security boundary.
+- No LLM calls in the router. Phase 3's LangChain agent imports classify_query()
+  as a pre-filter but can override the decision with full conversational context.
+- Phase 2 complete. Three days ahead of roadmap schedule (finished Day 28,
+  roadmap had Phase 2 through Day 32).
