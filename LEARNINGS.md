@@ -800,3 +800,30 @@ Ready for Week 4 (Neo4j). Framework:
 - DD-006 fully validated: 7B Ollama model + schema injection + 10 few-shot
   examples = 100% on basic query suite. Complex queries (temporal windows,
   anomaly detection) still untested — Day 38.
+  ## Day 32 — Citation guards + confidence scoring
+
+### Confidence scoring
+- Every query scored 0-100 from four components: cypher_valid (30 pts),
+  execution (30 pts), results (5-25 pts by count), retry_penalty (-10 each).
+- Three tiers: high (>=70) → full answer, moderate (40-69) → answer with
+  caveat, low (<40) → refuse with explanation.
+- All 8 test queries scored 80-85/100 (high confidence). Results component
+  gives 20 for 1-3 rows, 25 for 4+. A failed query with 2 retries would
+  score 45 (moderate) — answers but warns.
+- Refusal behavior is the differentiator. Most chatbots always answer.
+  This agent says "I can't answer this reliably" when confidence is low.
+
+### Citation guards
+- Answer synthesis prompt mandates citations: every claim must reference
+  specific IDs from the query results. Post-processing validates cited
+  IDs against actual result set using UUID regex matching.
+- Two citation categories: patient-level queries cite patient_ids,
+  aggregate queries cite numbers (no ID attribution needed).
+- GOTCHA: Neo4j returns dot-prefixed keys (p.patient_id) but citation
+  validator looked for bare keys (patient_id). All valid citations were
+  flagged as hallucinated. Fixed by stripping prefix with split(".")[-1].
+- Post-fix: Query 3 → 5 cited, 5 valid, 0 hallucinated. Query 6 → 3
+  cited, 3 valid, 0 hallucinated. Zero false positives.
+- Citation validation catches LLM-fabricated IDs before they reach the
+  user. In production, hallucinated citations would be stripped from the
+  answer or trigger a confidence downgrade.
