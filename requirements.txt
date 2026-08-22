@@ -57,3 +57,9 @@ tzdata==2026.2
 urllib3==2.7.0
 zipp==4.1.0
 neo4j
+
+chromadb
+sentence-transformers
+
+chromadb>=0.6.0
+sentence-transformers>=3.4.0

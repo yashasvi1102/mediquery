@@ -53,3 +53,7 @@ data_engineering/dbt/target/
 data_engineering/dbt/logs/
 *.duckdb
 
+
+chroma_db/
+
+chroma_db/
