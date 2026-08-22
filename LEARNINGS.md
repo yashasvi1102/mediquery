@@ -543,3 +543,138 @@ Ready for Week 4 (Neo4j). Framework:
 - Ingestion from Silver (not Gold — graph queries need atomic clinical events,
   not aggregations)
 - Neo4j Aura free tier
+
+## Day 22 — Neo4j Docker setup + graph schema design
+
+- Chose Neo4j Community Edition 5.26 in Docker over Aura free tier. Aura
+  limits to 50K nodes / 175K relationships — our graph needs ~682K nodes
+  and ~2.3M relationships. Same reasoning as DuckDB: own the infrastructure,
+  no expiry, always available for demo.
+- docker-compose.yml at project root. Neo4j on bolt://localhost:7687,
+  browser at http://localhost:7474. APOC plugin included.
+- Memory allocation: 512MB heap initial, 1GB heap max, 512MB page cache.
+  Sufficient for 682K nodes. Production would tune based on working set.
+- Graph schema designed and documented in docs/graph_schema.md. Key design
+  decisions:
+    - Condition nodes deduplicated by snomed_code (308 unique codes from 414K
+      condition rows). Medication nodes by rxnorm_code (352 unique).
+    - Per-encounter context (onset_date, authored_on, status) lives on
+      relationships, not nodes. Nodes hold the clinical concept.
+    - Observations deferred — DD-002 confirmed data quality issues. 8.3M
+      rows of unreliable data would inflate the graph 10x for no analytical
+      gain.
+    - Provider nodes are ID-only. silver_encounters has provider_id but no
+      name or speciality columns. Synthea practitioner details live in
+      separate FHIR bundles not parsed on Day 3.
+- 5 uniqueness constraints + 9 query-performance indexes created before
+  ingestion. MERGE requires unique constraints for idempotent upserts.
+- Smoke test (create/read/delete test node) passed.
+- GOTCHA: DuckDB file is mediquery.duckdb at project root (1.38 GB),
+  NOT data_engineering/dbt/mediquery.duckdb (12 KB empty shell). The dbt
+  folder's copy is what dbt creates by default. All ingestion scripts must
+  point to the root-level file.
+- Repo cleanup: moved ~15 investigation scripts from root into scripts/,
+  deleted accidental files (play, ql(•••). Added dbt/target/, dbt/logs/,
+  and __pycache__/ to .gitignore.
+
+## Day 23 — Patient + Encounter ingestion into Neo4j
+
+- Ingested 11,446 Patient nodes + 669,214 Encounter nodes + 669,214
+  HAS_ENCOUNTER relationships. Total: 680,660 nodes, 669,214 rels.
+- Patient ingestion: 5.2 seconds. Encounter ingestion: 65.6 seconds.
+  Batched UNWIND with 5,000 rows per transaction.
+- GOTCHA: Neo4j's date() function rejects ISO timestamps with time
+  component. DuckDB birth_date comes through pandas as
+  "2021-07-23T00:00:00" which Neo4j can't parse as Date. Fixed by
+  truncating to first 10 chars (YYYY-MM-DD) before sending.
+  birth_date is the only DATE column — all other temporal fields are
+  TIMESTAMP (start_time, end_time, onset_date) which Neo4j handles
+  natively as datetime.
+- Encounter ingestion uses combined MATCH+MERGE pattern: MATCH the
+  Patient (uses unique constraint index, O(1)), MERGE the Encounter,
+  MERGE the HAS_ENCOUNTER relationship. One pass creates both nodes
+  and relationships — fewer transactions than separating them.
+- Zero orphan encounters (no patient_id mismatches). Day 13 dbt FK
+  tests already guaranteed this, but verified in the graph anyway.
+- Post-injection encounter count (669,214) reflects Day 20 anomaly
+  injections (+25 HF readmission encounters over pre-injection 669,189).
+  Injected data flows through automatically — no special handling.
+
+## Day 24 — Condition, Medication, Provider nodes + 3 relationship types
+
+### Node ingestion
+- 308 Condition nodes (unique snomed_code), 352 Medication nodes (unique
+  rxnorm_code), 1,089 Provider nodes. All three phases under 1 second each.
+- Medication DISTINCT query returned 369 unique (rxnorm_code, medication_display,
+  drug_class, medication_flag) tuples, but MERGE on rxnorm_code collapsed to
+  352 nodes. Finding: 17 RxNorm codes map to multiple display/class combinations
+  in Synthea data. Last-write-wins on SET properties. Not a bug — MERGE is
+  working correctly — but worth investigating whether these are true drug
+  synonyms or Synthea data inconsistencies. Logged for Day 25 or later.
+
+### Relationship ingestion
+- DIAGNOSED_WITH: 414,876 source rows → 414,876 relationships. No dedup
+  occurred — every (encounter_id, snomed_code, condition_id) combination
+  is unique. 79.6 seconds.
+- PRESCRIBED: 574,888 source rows → 526,898 relationships. ~48K rows shared
+  the same (encounter_id, rxnorm_code) pair, meaning the same drug was
+  prescribed multiple times in one encounter via separate MedicationRequests.
+  MERGE collapsed these. medication_request_id on the relationship stores
+  only the last one per pair — minor data loss, acceptable for GraphRAG
+  queries. 76.3 seconds.
+- TREATED_BY: 669,214 source rows → 669,214 relationships. Exact match.
+  One provider per encounter, no dedup. 48.6 seconds.
+
+### Final graph stats
+- Total: 682,409 nodes, 2,280,202 relationships
+- Node breakdown: 669,214 Encounter | 11,446 Patient | 1,089 Provider |
+  352 Medication | 308 Condition
+- Relationship breakdown: 669,214 HAS_ENCOUNTER | 669,214 TREATED_BY |
+  526,898 PRESCRIBED | 414,876 DIAGNOSED_WITH
+- Ingestion time: ~5 minutes total across all phases
+- Cross-layer reconciliation: Patient count (11,446), Encounter count
+  (669,214), Provider count (1,089), Condition unique codes (308) all
+  match DuckDB Silver exactly. PRESCRIBED dedup (574K → 527K) is the
+  only expected discrepancy.
+  ## Day 25 — HAS_CONDITION + anomaly verification + graph validation
+
+### HAS_CONDITION relationships
+- 225,912 aggregated (Patient)-[:HAS_CONDITION]->(Condition) relationships
+  created from GROUP BY (patient_id, snomed_code) on silver_conditions.
+  Each relationship carries first_onset, latest_onset, episode_count.
+- Chronic cohort counts via HAS_CONDITION match Gold exactly:
+  hypertension 2,665 | diabetes_t2 1,731 | heart_failure 321 | copd 164.
+  Graph-based cohort queries now bypass Encounter traversal entirely.
+
+### Anomaly verification
+- All 55 injected anomalies present in the graph:
+  25 encounter nodes (anomaly_* prefix), 60 prescription rels, 25 condition rels.
+- Warfarin co-prescription query returned 72 patients, not 41. Root cause:
+  Cypher query matches warfarin + NSAID across ANY encounters in patient history.
+  A patient with aspirin in 2015 and warfarin in 2024 gets flagged. The SQL-based
+  ground truth uses concurrent/overlapping prescriptions. Naive graph traversal
+  inflates the cohort — same problem DD-001 identified for conditions now
+  appearing in Cypher queries. Temporal constraints needed in Phase 3.
+- HF 7-day readmissions returned 384, not ~30. Same root cause: Cypher query
+  lacks the three Gold-model filters (overlap exclusion, planned admission
+  exclusion, clinical reason exclusion). 384 is the raw unfiltered count,
+  consistent with Day 15's 45% raw rate before filtering.
+- Neither is an ingestion bug. Both are query refinement tasks for Day 38-40
+  when the GraphRAG agent builds clinically-filtered Cypher.
+
+### Cross-layer validation (all PASS)
+- Patients: 11,446 | Encounters: 669,214 | Providers: 1,089 |
+  Conditions: 308 | Medications: 352 — all match DuckDB Silver exactly.
+- All four chronic cohorts match Gold: HTN 2,665, T2DM 1,731, HF 321, COPD 164.
+- Inpatient encounters: 12,248 (includes 25 injected).
+- DD-001 distribution at the node level: 214 disorder, 67 finding, 22 situation,
+  5 unknown out of 308 unique SNOMED codes. Note: this is code-level, not
+  row-level — the 33%/45%/22% split from Day 10 is weighted by frequency.
+
+### Final graph stats
+- 682,409 nodes | 2,506,114 relationships
+- Relationship breakdown: 669,214 HAS_ENCOUNTER | 669,214 TREATED_BY |
+  526,898 PRESCRIBED | 414,876 DIAGNOSED_WITH | 225,912 HAS_CONDITION
+- Graph ingestion complete (Days 22-25). Phase 1 of the roadmap done.
+- Total ingestion time across 4 days: ~5 minutes of compute.
+  Development time was in schema design, validation, and debugging.
