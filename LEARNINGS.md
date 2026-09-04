@@ -905,3 +905,46 @@ Ready for Week 4 (Neo4j). Framework:
   but would need caching or query templates in production.
 - Total suite time: 43 minutes. Individual query latency ranges from
   instant (off-topic refusal) to 405s (complex multi-hop). Median ~30s.
+  ## Day 36 — Anomaly detection benchmark: 100% recall, precision analysis
+
+### Results
+- Two anomaly types benchmarked against ground truth (30 warfarin + 25 HF
+  injected patients):
+    Warfarin co-prescription:
+      Reference: 72 detected, 30/30 TP, recall 100%, precision 41.7%
+      Agent:     72 detected, 30/30 TP, recall 100%, precision 41.7%
+    HF 7-day readmission:
+      Reference: 155 detected, 25/25 TP, recall 100%, precision 16.1%
+      Agent:     246 detected, 25/25 TP, recall 100%, precision 10.2%
+
+### Analysis
+- Recall is 100% on both anomaly types — every injected anomaly found.
+  The injection framework (Day 20) and graph data (Day 24-25) are correct.
+- Agent Cypher matched reference exactly for warfarin (72 vs 72). For HF,
+  the agent omitted the heart_failure condition filter, detecting ALL 7-day
+  readmissions (246) instead of just HF ones (155). Few-shot gap — adding
+  a condition-filtered readmission example would fix this.
+- "False positives" are genuine clinical matches, not errors. The 42
+  warfarin FPs include 11 known baseline patients (Day 19) plus ~31 with
+  lifetime co-occurrence. The 130 HF FPs are real readmissions, just not
+  injected ones. Precision against injected-only is the stricter measure.
+- Adjusted precision (counting baseline matches as TP): warfarin ~58%
+  (41/72), HF ~19% (30/155). Still below the aspirational 92% because
+  lifetime co-occurrence inflates the detection set. Temporal concurrence
+  (both drugs active within same time window) would tighten precision
+  significantly but requires prescription date logic the graph doesn't
+  currently support.
+
+### Interview framing
+"I built a measurable anomaly benchmark with 100% recall on 55 injected
+anomalies. Precision is 42% for drug interactions because the graph
+query uses lifetime co-occurrence — a patient who took aspirin in 2015
+and warfarin in 2024 gets flagged. Tightening to temporal concurrence
+would improve precision but requires date-range logic on prescriptions.
+The honest reporting of these numbers, with the analysis of why precision
+is low, is more valuable than an inflated metric."
+
+### Presentation update
+Replace "92%+ precision" with: "100% recall on injected anomalies,
+42% precision on drug interactions (lifetime co-occurrence), with
+documented path to precision improvement via temporal filtering."
