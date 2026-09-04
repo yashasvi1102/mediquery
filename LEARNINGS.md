@@ -800,7 +800,8 @@ Ready for Week 4 (Neo4j). Framework:
 - DD-006 fully validated: 7B Ollama model + schema injection + 10 few-shot
   examples = 100% on basic query suite. Complex queries (temporal windows,
   anomaly detection) still untested — Day 38.
-  ## Day 32 — Citation guards + confidence scoring
+  
+## Day 32 — Citation guards + confidence scoring
 
 ### Confidence scoring
 - Every query scored 0-100 from four components: cypher_valid (30 pts),
@@ -827,3 +828,28 @@ Ready for Week 4 (Neo4j). Framework:
 - Citation validation catches LLM-fabricated IDs before they reach the
   user. In production, hallucinated citations would be stripped from the
   answer or trigger a confidence downgrade.
+
+  ## Day 33 — Hybrid retrieval: all three routes operational
+
+- Integrated query router (Day 28) with Neo4j Cypher (structured), Chroma
+  vector search (semantic), and combined path (hybrid). Off-topic queries
+  refused without hitting any database.
+- 9/9 test queries routed correctly: 4 structured, 2 semantic, 2 hybrid,
+  1 off-topic. All routes returned clinically sensible answers.
+- Semantic search working end-to-end: Chroma similarity → top 5 patient
+  profiles → LLM synthesis with citations. "Elderly cardiac patients"
+  returned profiles with cardiac conditions at distance 0.57. "Complex
+  medical histories" returned multi-morbid patients with rare conditions.
+- Hybrid queries generate Cypher for structured filtering (e.g. diabetes_t2
+  patients with medication counts) then Chroma for semantic context. LLM
+  combines both sources in the answer. Both hybrid queries generated valid
+  Cypher with correct multi-hop paths.
+- Zero hallucinated citations across all 9 queries. Citation validation
+  working correctly after Day 32 fix.
+- Minor issue: hybrid Query 7 had 0 citations — LLM summarized without
+  citing specific patient IDs. Prompt refinement for hybrid answers
+  needed but not blocking.
+- Agent v3 connects to three services: Ollama (LLM), Neo4j (graph),
+  Chroma (vectors). All initialized at startup with health checks.
+  Chroma loads 11,446 documents. Total initialization: ~5 seconds
+  (dominated by embedding model load).
