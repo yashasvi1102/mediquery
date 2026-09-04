@@ -853,3 +853,24 @@ Ready for Week 4 (Neo4j). Framework:
   Chroma (vectors). All initialized at startup with health checks.
   Chroma loads 11,446 documents. Total initialization: ~5 seconds
   (dominated by embedding model load).
+  ## Day 34 — Natural language cohort builder
+
+- Built CohortBuilder that takes NL cohort definitions, generates Cypher
+  returning patient_ids, then runs 10 templated analysis queries for
+  demographics, conditions, medications, and encounters. CSV export included.
+- 3/3 test cohorts generated correct Cypher and clinically plausible profiles:
+    - "Diabetic patients over 65": 947 patients, avg age 81.6, 83% comorbid HTN
+    - "HF patients with inpatient encounters": 311 patients, 91.6% deceased,
+      top meds furosemide + carvedilol (standard HF treatment)
+    - "Female HTN + diabetes": 583 patients, top med lisinopril (first-line
+      for both conditions)
+- Design: LLM generates only the patient-finding Cypher. All analysis queries
+  are templated and deterministic — no LLM involvement in the stats. This
+  means the analysis results are always correct if the patient IDs are correct.
+  The LLM's only failure mode is finding the wrong patients.
+- Cohort 2 validates a clinical pattern: 311/321 HF patients (97%) had
+  inpatient encounters. HF almost always requires hospitalization. Synthea
+  models this correctly.
+- CSV export of first cohort written to data_generation/parsed/cohort_export.csv.
+  Cohort export is the "open-source TriNetX alternative" story from the
+  original deck.
