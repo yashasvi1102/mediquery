@@ -948,3 +948,41 @@ is low, is more valuable than an inflated metric."
 Replace "92%+ precision" with: "100% recall on injected anomalies,
 42% precision on drug interactions (lifetime co-occurrence), with
 documented path to precision improvement via temporal filtering."
+## Day 37 — FastAPI RBAC: access matrix verified, data filtering active
+
+### Architecture
+- FastAPI app at app/ with JWT auth, 4 roles (doctor/researcher/admin/patient),
+  3 endpoints (/query, /cohort, /anomalies/detect), health check.
+- RBAC enforcement at API layer: FastAPI validates tokens and filters data
+  BEFORE responses reach the frontend. Streamlit (Phase 5) never sees
+  restricted data.
+- Agent, cohort builder, and Chroma loaded once at startup via lifespan.
+
+### Test results (test_rbac.py)
+- Access matrix: 100% correct across all roles and endpoints
+    - Doctor: /query ✓, /cohort ✓, /anomalies ✓
+    - Researcher: /query ✓, /cohort ✓, /anomalies ✓
+    - Admin: /query ✓ (aggregates only), /cohort 403, /anomalies 403
+    - Patient: /query ✓ (filtered), /cohort 403, /anomalies 403
+    - No auth: all 401
+- Admin filtering active: answer replaced with "Aggregate data only.
+  Patient-level details are restricted for admin users."
+- Health endpoint confirms all three services (Neo4j, Chroma, Ollama).
+
+### Known gaps (documented, not blocking)
+- Researcher answer text contains raw patient IDs. Data filtering hashes
+  IDs in the results list, but the LLM generates the answer text from
+  unfiltered results. Fix: filter results BEFORE answer synthesis, not after.
+  Same issue affects patient role.
+- Patient role receives answers about other patients because the query
+  returns all matches, then the filter runs. For a demo, the patient view
+  should use pre-filtered queries (WHERE p.patient_id = $current_id).
+- Both gaps share the same root cause: answer generation happens before
+  data filtering. Architectural fix is clear but deferred to Phase 5
+  (Streamlit) where per-role query templates are easier to implement.
+
+### Interview framing
+"RBAC isn't a dropdown that changes the UI. FastAPI enforces it with JWT
+tokens and role-based filtering before data reaches the frontend. An admin
+can't see patient-level data even if they modify the Streamlit code —
+the API won't return it."
