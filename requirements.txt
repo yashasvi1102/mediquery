@@ -69,3 +69,7 @@ langchain-ollama
 langchain
 langchain-core
 langchain-community
+
+fastapi
+uvicorn
+python-jose[cryptography]
