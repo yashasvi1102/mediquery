@@ -73,3 +73,5 @@ langchain-community
 fastapi
 uvicorn
 python-jose[cryptography]
+
+streamlit
