@@ -314,38 +314,54 @@ def cohort_endpoint(
 # ---------------------------------------------------------------------------
 @app.get("/anomalies/detect")
 def detect_anomalies(user: dict = Depends(require_role("doctor", "researcher"))):
+    """Run anomaly detection with pre-written Cypher. No LLM needed."""
     anomalies = {}
 
-    warfarin_result = agent.query(
-        "Find patients prescribed both Warfarin and either Aspirin or Ibuprofen"
-    )
-    warfarin_patients = warfarin_result.get("results", [])
-    if isinstance(warfarin_patients, list):
+    with agent.neo4j_driver.session() as session:
+        # Warfarin co-prescription
+        result = session.run("""
+            MATCH (p:Patient)-[:HAS_ENCOUNTER]->(e1:Encounter)-[:PRESCRIBED]->(m1:Medication)
+            WHERE m1.medication_display CONTAINS 'Warfarin'
+            WITH DISTINCT p
+            MATCH (p)-[:HAS_ENCOUNTER]->(e2:Encounter)-[:PRESCRIBED]->(m2:Medication)
+            WHERE m2.medication_display CONTAINS 'Aspirin'
+               OR m2.medication_display CONTAINS 'Ibuprofen'
+            RETURN DISTINCT p.patient_id AS patient_id, p.given_name AS given_name,
+                   p.family_name AS family_name
+        """)
+        warfarin_patients = [dict(r) for r in result]
         warfarin_patients = filter_for_role(warfarin_patients, user["role"])
 
-    anomalies["warfarin_coprescription"] = {
-        "description": "Patients prescribed warfarin with concurrent NSAID/antiplatelet",
-        "patient_count": len(warfarin_patients),
-        "severity": "high",
-        "patients": warfarin_patients[:10],
-    }
+        anomalies["warfarin_coprescription"] = {
+            "description": "Patients prescribed warfarin with concurrent NSAID/antiplatelet",
+            "patient_count": len(warfarin_patients),
+            "severity": "high",
+            "patients": warfarin_patients[:10],
+        }
 
-    hf_result = agent.query(
-        "Find heart failure patients readmitted within 7 days"
-    )
-    hf_patients = hf_result.get("results", [])
-    if isinstance(hf_patients, list):
+        # HF early readmission
+        result = session.run("""
+            MATCH (p:Patient)-[:HAS_CONDITION]->(c:Condition {condition_flag: 'heart_failure'})
+            WITH DISTINCT p
+            MATCH (p)-[:HAS_ENCOUNTER]->(e1:Encounter {is_inpatient: true})
+            MATCH (p)-[:HAS_ENCOUNTER]->(e2:Encounter {is_inpatient: true})
+            WHERE e2.start_time > e1.end_time
+              AND e1.encounter_id <> e2.encounter_id
+              AND duration.between(e1.end_time, e2.start_time).days <= 7
+            RETURN DISTINCT p.patient_id AS patient_id, p.given_name AS given_name,
+                   p.family_name AS family_name
+        """)
+        hf_patients = [dict(r) for r in result]
         hf_patients = filter_for_role(hf_patients, user["role"])
 
-    anomalies["hf_early_readmission"] = {
-        "description": "Heart failure patients readmitted within 7 days of discharge",
-        "patient_count": len(hf_patients),
-        "severity": "high",
-        "patients": hf_patients[:10],
-    }
+        anomalies["hf_early_readmission"] = {
+            "description": "Heart failure patients readmitted within 7 days of discharge",
+            "patient_count": len(hf_patients),
+            "severity": "high",
+            "patients": hf_patients[:10],
+        }
 
     return {"anomalies": anomalies, "role_applied": user["role"]}
-
 
 # ---------------------------------------------------------------------------
 # Health

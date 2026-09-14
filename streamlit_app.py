@@ -67,7 +67,7 @@ def api_query(question: str):
             f"{API_BASE}/query",
             json={"question": question},
             headers=api_headers(),
-            timeout=300
+            timeout=300,
         )
         if r.status_code == 200:
             return r.json()
@@ -82,7 +82,7 @@ def api_cohort(definition: str):
             f"{API_BASE}/cohort",
             json={"definition": definition},
             headers=api_headers(),
-            timeout=120,
+            timeout=300,
         )
         if r.status_code == 200:
             return r.json()
@@ -98,7 +98,7 @@ def api_anomalies():
         r = requests.get(
             f"{API_BASE}/anomalies/detect",
             headers=api_headers(),
-            timeout=120,
+            timeout=300,
         )
         if r.status_code == 200:
             return r.json()
@@ -339,8 +339,9 @@ def render_cohort_builder():
 
             age = demo.get("age_stats", {})
             if age:
-                st.markdown(f"**Age:** {age.get('min_age', '?')} - {age.get('max_age', '?')} "
-                          f"(avg {age.get('avg_age', '?'):.1f})" if isinstance(age.get('avg_age'), (int, float)) else "")
+                avg = age.get('avg_age')
+                if isinstance(avg, (int, float)):
+                    st.markdown(f"**Age:** {age.get('min_age', '?')} - {age.get('max_age', '?')} (avg {avg:.1f})")
 
             if demo.get("race"):
                 st.markdown("**Race:**")

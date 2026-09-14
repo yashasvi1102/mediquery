@@ -16,6 +16,7 @@ interviews: Streamlit never sees data the role can't access.
 """
 
 import hashlib
+import re
 
 
 def _hash_id(raw_id: str) -> str:
@@ -124,12 +125,18 @@ def filter_answer_for_role(answer: str, role: str) -> str:
         return answer
 
     if role == "researcher":
-        return answer  # citations already use hashed IDs from filtered results
+        return answer  # data already de-identified in results
 
     if role == "admin":
-        return "Aggregate data only. Patient-level details are restricted for admin users."
+        # Allow aggregate answers (counts, totals) through
+        # Block only if answer contains patient-level details
+        has_patient_id = bool(re.search(r'[a-f0-9]{8}-[a-f0-9]{4}', answer))
+        has_names = bool(re.search(r'Patient ID:.*Name:', answer, re.IGNORECASE))
+        if has_patient_id or has_names:
+            return "Aggregate data only. Patient-level details are restricted for admin users."
+        return answer
 
     if role == "patient":
-        return answer  # filtered to own data already
+        return answer  # already scoped to own data
 
     return answer
