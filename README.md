@@ -1,205 +1,193 @@
 ﻿# MediQuery
 
-**MediQuery** is a 6-week clinical analytics build. Synthetic FHIR patient data
-flows through a DuckDB Medallion lakehouse (Weeks 1-3, complete), a Neo4j
-knowledge graph (Week 4), and a GraphRAG agent with mandatory citation guards
-(Week 5). Currently at end of Week 3 — Bronze + Silver + 5 Gold models built,
-with an anomaly injection benchmark and a validation suite locking every
-quantitative claim in the project's design docs.
+**A safety-first healthcare data intelligence platform** that parses 11,446 synthetic FHIR patient records through a DuckDB Medallion architecture, loads them into a Neo4j knowledge graph, and exposes a GraphRAG agent with citation guards, confidence scoring, and 4-tier RBAC — all running locally with zero cloud dependencies.
 
-The project's opinionated stance: **synthetic healthcare data has documented
-limitations that portfolio tutorials skip.** This project systematically
-audits Synthea against real-world clinical benchmarks and documents five
-limitations, each of which changes how a downstream model has to be designed.
+## What Makes This Different
 
-**Stack:** Synthea · Python · DuckDB · dbt · Neo4j · LangChain · Ollama · Streamlit
+Most Synthea portfolio projects parse the data and build dashboards. This one interrogates the data.
 
-## Status
+**Five documented data quality findings** that most tutorials miss:
 
-**Days 1-20 of 42 complete.**
+| Finding | Impact |
+|---------|--------|
+| **DD-001**: 67% of FHIR "conditions" are not diseases — they're social factors, admin events, and employment status | Naive cohort queries inflate by 3x without SNOMED classification |
+| **DD-002**: 49% of HbA1c readings are clinically impossible (below 4.0%, incompatible with life) | Observation-based adherence metrics don't work on Synthea |
+| **DD-003**: SNOMED noise appears in encounter reasons and observation categories, not just conditions | Classification must be applied project-wide, not per-table |
+| **DD-004**: Synthea generates prescriptions but not pharmacy fills — PDC underestimates adherence by 30-50% | Pivoted from PDC to persistence-based adherence |
+| **DD-005**: 2 of 4 anomaly types dropped after baseline analysis showed undetectable signal:noise ratios | Shipped 2 measurable anomalies instead of 4 noisy ones |
 
-- Bronze + Silver + 5 Gold dbt models built.
-- 37 Silver dbt tests + 70 Gold dbt tests + 34 Python distribution assertions passing.
-- 5 documented design decisions (DD-001 through DD-005) covering Synthea
-  data-quality limitations and how each model works around them.
-- Anomaly injection framework operational: 30 warfarin coprescriptions
-  + 25 HF 7-day readmissions injected. Post-injection detection = 41 and 30,
-  matching pre-injection baseline + injected counts exactly.
+Two additional design decisions document the LLM and summary generation choices (DD-006, DD-007).
 
-## What's built
+## Architecture
 
-| Layer | Details | Rows | Tests |
-|---|---|---|---|
-| Synthea | 11,446 Massachusetts synthetic patients | — | — |
-| FHIR Parser | 5 resource types; medicationReference fallback recovers 202K rows | 1.67M | Smoke tests in repo |
-| Bronze | DuckDB `read_parquet()` load, ~5s | 1.67M | Row-count assertions |
-| Silver | 5 dbt models; SNOMED classifier; therapeutic cohort flags; plausibility flags | 10.0M+ | 33 dbt + 14 Python |
-| Gold | 5 dbt models; readmissions, chronic conditions, PDC adherence, per-patient utilization, per-provider volume | ~30K | 71 dbt + 21 Python |
-| Anomaly Benchmark | 2 injected anomaly types; ground_truth_anomalies table | 55 injected | 6 Python assertions |
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Streamlit UI (4 personas)                 │
+│        Doctor │ Researcher │ Admin │ Patient                 │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ HTTP + JWT
+┌──────────────────────▼──────────────────────────────────────┐
+│              FastAPI RBAC Layer (port 8080)                  │
+│   Token auth │ Role-based filtering │ Filter before synthesis│
+└───────┬──────────────┬──────────────────┬───────────────────┘
+        │              │                  │
+┌───────▼───────┐ ┌────▼─────┐ ┌──────────▼──────────┐
+│  Query Router │ │  Ollama  │ │  Confidence Scorer   │
+│  (regex-based)│ │  LLM     │ │  + Citation Guards   │
+│  structured/  │ │qwen2.5-  │ │  refuse < 40         │
+│  semantic/    │ │coder:7b  │ │  caveat 40-69        │
+│  hybrid       │ │          │ │  answer >= 70        │
+└───────┬───────┘ └────┬─────┘ └──────────────────────┘
+        │              │
+┌───────▼───────┐ ┌────▼──────────┐ ┌─────────────────┐
+│    Neo4j      │ │  Chroma       │ │    DuckDB        │
+│  682K nodes   │ │  11K patient  │ │  Medallion       │
+│  2.5M rels    │ │  embeddings   │ │  Bronze/Silver/  │
+│  (Docker)     │ │  (local)      │ │  Gold + dbt      │
+└───────────────┘ └───────────────┘ └─────────────────┘
+```
 
-Cross-layer reconciliation is exact: 11,446 patients / 669,189 encounters / 1,089
-providers all trace Silver → Gold with zero drift, enforced by Python assertions
-in `tests/validate_gold.py`.
+## Tech Stack
 
-## The clinical data problem this project addresses
-
-Most healthcare data tutorials treat the FHIR `Condition` resource as a list of
-diseases. It's not. Running a top-10 conditions query on 11,446 synthetic
-patients revealed that **7 of the 10 most common "conditions" are not clinical
-disorders** — they're social factors, administrative events, or employment status.
-
-| Rank | Condition | Count | Type |
-|---|---|---|---|
-| 1 | Medication review due (situation) | 82,171 | Administrative |
-| 2 | Stress (finding) | 32,447 | Social factor |
-| 3 | Gingivitis (disorder) | 30,703 | Clinical |
-| 4 | Full-time employment (finding) | 29,885 | Social factor |
-| 5 | Part-time employment (finding) | 18,574 | Social factor |
-| 6 | Social isolation (finding) | 11,689 | Social factor |
-| 7 | Viral sinusitis (disorder) | 11,631 | Clinical |
-| 8 | Limited social contact (finding) | 11,561 | Social factor |
-| 9 | Not in labor force (finding) | 10,431 | Social factor |
-| 10 | Gingival disease (disorder) | 8,951 | Clinical |
-
-A naive "patients with conditions" query inflates cohorts by counting employed
-people as sick. The Silver layer separates them using SNOMED hierarchy
-classification: **only 32.7% of 414,851 conditions are actual disorders.**
-Cohort queries in Gold hit `is_billable_diagnosis` or `condition_flag` by
-convention, never raw SNOMED codes.
-
-Full write-up: `docs/design_decisions.md` DD-001.
-
-## Five documented Synthea limitations
-
-Each finding surfaced during model construction and forced a design change.
-
-| DD | Finding | Model impact |
-|---|---|---|
-| DD-001 | 67% of FHIR Conditions are SDOH or admin events, not diseases | Silver conditions classifier; Gold filters via `is_billable_diagnosis` |
-| DD-002 | 49% of HbA1c readings are clinically impossible (< 4.0%); diagnosed hypertensives show no BP separation from controls | silver_observations exposes `is_plausible_value`; medication adherence pivoted from clinical-outcome to prescription-pattern |
-| DD-003 | SNOMED-noise pattern crosses resource boundaries — Encounter.reasonCode also inflated by history/procedure codes | gold_readmissions applies same classifier to `reason_display`; drops 45% → 19% 30-day rate through overlap + planned + clinical filters |
-| DD-004 | Synthea emits MedicationRequest but not MedicationDispense; PDC bimodal (64% < 0.25, 20% ≥ 0.80) | gold_medication_adherence ships PDC as informational; persistence_days is the operative adherence signal |
-| DD-005 | 2 of 4 anomaly types dropped after baseline analysis (baselines 60x and 19x injection targets) | Anomaly benchmark ships 2 clean measurements (warfarin coprescription, HF early readmission) instead of 4 noisy ones |
-
-Full write-ups: `docs/design_decisions.md`.
-
-## Readmission methodology: 45% → 19% via three filters
-
-`gold_readmissions` computes CMS-aligned 30-day readmission pairs from
-`silver_encounters`. Raw Synthea produces a 45.23% 30-day rate — 3x higher than
-real-world CMS all-cause (~15%). Three orthogonal filters bring it into range:
-
-| Filter | 30-day rate | Why |
-|---|---|---|
-| Raw pairs (no filter) | 45.23% | Includes overlapping encounters and oncology follow-ups |
-| Overlap exclusion (days_between >= 0) | — | Synthea generates concurrent long-stay + acute encounters that aren't real readmissions |
-| + Planned admissions excluded (`is_likely_planned = false`) | — | 63% of raw 30-day hits were lung-cancer TNM staging admissions |
-| + Clinical-reason filter (`readmission_reason_is_clinical = true`) | **19.34%** | Removes history codes ("History of CABG") and procedure codes ("Patient transfer to SNF") that Synthea uses as encounter reasons |
-
-Real-world CMS Hospital-Wide Readmission is ~15%. Ours lands at 19.34%.
-Top clinical drivers after filtering: heart failure, COVID-19, MI, aortic
-valve disease. Real acute readmission patterns.
-
-## Data-quality validation
-
-Two layers.
-
-**dbt tests** cover schema invariants: primary key uniqueness, not-null, enum
-values, foreign keys. 33 Silver + 71 Gold tests. Run via `dbt test`.
-
-**Python distribution suite** (`tests/validate_silver.py` and
-`tests/validate_gold.py`) covers claims dbt cannot enforce — distribution
-shape, cross-layer reconciliation, DD-specific quantitative constraints.
-35 assertions total. Run via `python -m tests.validate_silver` and
-`python -m tests.validate_gold`.
-
-Every quantitative claim in this README and in `docs/design_decisions.md`
-is reproducible from these two commands. Distribution drift fails by name,
-not silently.
-
-## Silver + Gold row counts
-
-| Table | Rows |
-|---|---|
-| silver_patients | 11,446 |
-| silver_encounters | 669,189 |
-| silver_conditions | 414,851 |
-| silver_medications | 574,828 |
-| silver_observations | 8,348,416 |
-| gold_readmissions | 4,860 |
-| gold_chronic_conditions | 4,881 |
-| gold_medication_adherence | 8,546 |
-| gold_utilization | 11,446 |
-| gold_provider_volume | 1,089 |
-| gold.ground_truth_anomalies | 55 |
-
-## Stack rationale
-
-- **DuckDB instead of Snowflake.** Same SQL, same dbt workflow, portable to
-  Snowflake in a day. Chose local execution so the demo stays reproducible
-  after any trial window closes. Trade-off is losing multi-user concurrency
-  and cloud-native features — neither needed at this scale.
-- **Ollama instead of OpenAI API.** Local LLM, no API costs, no rate limits.
-- **dbt** for Silver/Gold transformations — industry-standard analytics
-  engineering tool.
-- **Neo4j Aura** free tier for the Week 4 clinical knowledge graph.
+| Layer | Technology | Why |
+|-------|-----------|-----|
+| Data Generation | Synthea (11,446 MA patients) | Realistic FHIR bundles, free, reproducible |
+| Warehouse | DuckDB | Free forever, no trial expiry, fast analytical queries |
+| Transformation | dbt-duckdb | Medallion architecture, tested models, lineage |
+| Knowledge Graph | Neo4j Community (Docker) | No Aura node limits (682K nodes vs 50K cap), local |
+| Vector Store | Chroma + all-MiniLM-L6-v2 | Free, local embeddings, semantic patient search |
+| LLM | Ollama (qwen2.5-coder:7b) | Free, offline, no API key, good Cypher generation with schema injection |
+| API | FastAPI | JWT auth, RBAC enforcement, role-based data filtering |
+| UI | Streamlit | 4-persona interface, chat, cohort builder, anomaly alerts |
+| Testing | dbt tests + Python validation | 107 dbt tests + 34 Python assertions + 28 edge cases |
 
 ## Quickstart
 
-Requires Python 3.13, Java 17 (for Synthea), ~2 GB free disk.
+**Prerequisites:** Python 3.13, Docker Desktop, Ollama, ~14GB RAM
 
 ```bash
+# 1. Clone
 git clone https://github.com/yashasvi1102/mediquery.git
 cd mediquery
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
+# 2. Python environment
+python -m venv .venv
+.venv\Scripts\activate          # Windows
 pip install -r requirements.txt
 
-# Generate synthetic FHIR data (or skip if included sample used)
-bash data_generation/run_synthea.sh 1000
+# 3. Pull LLM model
+ollama pull qwen2.5-coder:7b
 
-# Load Bronze
-python data_generation/load_to_bronze.py
+# 4. Start services
+docker compose up -d             # Neo4j (wait 15 seconds)
+uvicorn app.main:app --port 8080 # API (new terminal)
+streamlit run streamlit_app.py   # UI (new terminal)
 
-# Build Silver + Gold
-cd data_engineering/dbt
-dbt run
-dbt test
-
-# Validate distributions (Silver + Gold)
-cd ../..
-python -m tests.validate_silver
-python -m tests.validate_gold
-
-# Inject anomalies (optional — for Week 6 benchmark work)
-python -m data_generation.anomaly_injector
+# 5. Open http://localhost:8501 and pick a role
 ```
 
-## Roadmap
+**Note:** The first run requires Synthea data generation and pipeline execution (Days 1-21). The graph, Chroma, and DuckDB data are pre-populated if you're running from a complete build.
 
-- ✅ Week 1: FHIR ingestion + Bronze layer
-- ✅ Week 2: Silver layer + dbt tests + Python distribution suite
-- ✅ Week 3: 5 Gold models + anomaly injection framework + DD-003/004/005
-- ⬜ Week 4: Neo4j clinical knowledge graph
-- ⬜ Week 5: GraphRAG agent with citation guards
-- ⬜ Week 6: Multi-persona dashboard + anomaly detection benchmark
+## RBAC Access Matrix
 
-## Design decisions
+| Capability | Doctor | Researcher | Admin | Patient |
+|-----------|--------|------------|-------|---------|
+| Clinical queries (NL → Cypher) | ✓ full data | ✓ hashed IDs, no names | ✓ aggregates only | ✓ own record only |
+| Cohort builder | ✓ | ✓ de-identified | ✗ (403) | ✗ (403) |
+| Anomaly detection | ✓ | ✓ de-identified | ✗ (403) | ✗ (403) |
+| See patient names | ✓ | ✗ stripped | ✗ | own only |
+| See raw patient IDs | ✓ | ✗ hashed (P-xxxx) | ✗ | own only |
+| Cypher visible | ✓ | ✓ | ✗ | ✗ |
+| No auth | 401 | 401 | 401 | 401 |
 
-See `docs/design_decisions.md` for full write-ups. Each DD includes context,
-findings, decision, consequences.
+RBAC is enforced at the API layer. Data is filtered **before** the LLM synthesizes the answer. Streamlit never sees restricted data.
 
-- DD-001: SNOMED hierarchy classification in Silver Conditions
-- DD-002: Synthea's lack of clinical realism in observation values
-- DD-003: SNOMED classification pattern applies across FHIR resources, not just Conditions
-- DD-004: Synthea prescriptions are authorization events, not dispensing records
-- DD-005: 2 of 4 anomaly types dropped after baseline analysis
+## Anomaly Detection Benchmark
 
-## Cleanup backlog (Week 4+)
+Two anomaly types with injected ground truth (30 warfarin + 25 HF):
 
-- Add `dbt-utils` package for `unique_combination_of_columns` tests currently
-  enforced in Python
-- Extend silver_medications drug_class taxonomy with `anticoagulant` and
-  `antiplatelet` classes (warfarin currently sits under `other`)
-- Extend silver_conditions with `clinical_subcategory` (disease-system-level
-  classification for gold_provider_volume top-category signal)
-- Replace `datetime.utcnow()` with `datetime.now(datetime.UTC)`
+| Anomaly | Detected | TP | FP (baseline) | FN | Precision | Recall |
+|---------|----------|-----|---------------|-----|-----------|--------|
+| Warfarin co-prescription | 72 | 30 | 42 | 0 | 41.7% | 100% |
+| HF 7-day readmission | 155 | 25 | 130 | 0 | 16.1% | 100% |
+
+**100% recall** — every injected anomaly found. Precision reflects lifetime co-occurrence (a patient who took aspirin in 2015 and warfarin in 2024 gets flagged). Temporal concurrence filtering would improve precision but requires date-range logic on prescriptions.
+
+## Graph Statistics
+
+| Entity | Count |
+|--------|-------|
+| Patient nodes | 11,446 |
+| Encounter nodes | 669,214 |
+| Condition nodes (unique SNOMED) | 308 |
+| Medication nodes (unique RxNorm) | 352 |
+| Provider nodes | 1,089 |
+| **Total nodes** | **682,409** |
+| HAS_ENCOUNTER relationships | 669,214 |
+| TREATED_BY relationships | 669,214 |
+| PRESCRIBED relationships | 526,898 |
+| DIAGNOSED_WITH relationships | 414,876 |
+| HAS_CONDITION relationships | 225,912 |
+| **Total relationships** | **2,506,114** |
+
+## GraphRAG Agent Performance
+
+| Metric | Result |
+|--------|--------|
+| Cypher generation accuracy | 8/8 on test suite (with 11 few-shot examples) |
+| Query routing accuracy | 95% (20/21 test queries) |
+| Citation validation | 0 hallucinated citations across all tests |
+| Edge case handling | 0 crashes on 28 adversarial inputs |
+| Confidence scoring | 80-85/100 on valid queries, refuses below 40 |
+| Off-topic detection | Catches prompt injection, refuses gracefully |
+
+## Project Structure
+
+```
+mediquery/
+├── data_generation/           # Synthea parsing, anomaly injection
+│   ├── fhir_parser.py         # FHIR bundle → structured records
+│   ├── parse_all_bundles.py   # Batch parser (11,446 patients)
+│   └── anomaly_injector.py    # Ground truth anomaly injection
+├── data_engineering/
+│   ├── dbt/                   # Medallion architecture (Silver/Gold)
+│   ├── schema/                # Bronze + Gold SQL schemas
+│   ├── neo4j/                 # Graph ingestion + GraphRAG agent
+│   │   ├── graphrag_agent.py  # NL → Cypher → answer pipeline
+│   │   ├── cohort_builder.py  # NL cohort definition → stats
+│   │   ├── query_router.py    # Structured/semantic/hybrid routing
+│   │   ├── cypher_few_shots.py # Few-shot examples for LLM
+│   │   └── ingest_*.py        # Neo4j data loading scripts
+│   └── load_bronze.py         # Parquet → DuckDB Bronze loader
+├── app/                       # FastAPI RBAC application
+│   ├── main.py                # API endpoints
+│   ├── auth.py                # JWT token management
+│   └── rbac.py                # Role-based data filtering
+├── streamlit_app.py           # 4-persona UI
+├── tests/                     # Validation suites
+├── docs/                      # Design decisions, graph schema
+├── docker-compose.yml         # Neo4j service
+├── mediquery.duckdb           # Analytical warehouse (gitignored)
+├── LEARNINGS.md               # Day-by-day build log
+└── requirements.txt           # Python dependencies
+```
+
+## Design Decisions
+
+All documented in [docs/design_decisions.md](docs/design_decisions.md):
+
+- **DD-001**: SNOMED classification in Silver (67% non-disease filter)
+- **DD-002**: Synthea observation values don't correlate with diagnoses
+- **DD-003**: SNOMED noise crosses FHIR resource boundaries
+- **DD-004**: Synthea has no MedicationDispense stream (PDC broken)
+- **DD-005**: 2 of 4 anomaly types dropped after baseline analysis
+- **DD-006**: Ollama local over cloud APIs (free, offline, no expiry)
+- **DD-007**: Template-based patient summaries over LLM-generated
+
+## What I'd Do Differently
+
+- **Add temporal concurrence to anomaly detection.** Current warfarin query uses lifetime co-occurrence. Checking if both drugs were active in the same time window would improve precision from 42% to ~80%+.
+- **Parse Synthea practitioner bundles.** Provider nodes are ID-only because the FHIR parser doesn't extract practitioner details from separate bundles. Enriching Provider nodes with name and speciality would improve the demo.
+- **Use GPT-4o for Cypher generation.** The 7B local model works (8/8 test accuracy) but is slow (30-60s per query). GPT-4o would be 2-3 seconds with better accuracy on complex queries. The architecture supports swapping via environment variable.
+- **Add clinical_subcategory to Silver conditions.** DD-001 classifies at the category level (disorder/finding/situation). Adding body-system subcategories (cardiac/respiratory/endocrine) would make provider analytics and cohort breakdowns more useful.
+

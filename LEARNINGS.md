@@ -986,3 +986,82 @@ documented path to precision improvement via temporal filtering."
 tokens and role-based filtering before data reaches the frontend. An admin
 can't see patient-level data even if they modify the Streamlit code —
 the API won't return it."
+## Day 37 (continued) — RBAC refinement: filter-before-synthesis verified
+
+- Fixed two RBAC gaps from initial implementation:
+    1. Results now filtered BEFORE answer synthesis. The LLM receives
+       hashed IDs for researcher role and scoped data for patient role.
+       Researcher answer shows "P-a29945d9b8df" instead of raw UUIDs.
+       Names are stripped — LLM never sees them.
+    2. Patient queries scoped at Cypher level. Question prefixed with
+       "Only for patient with patient_id '{id}':" so the LLM generates
+       Cypher with WHERE clause. Neo4j returns only that patient's data.
+       Demo patient without diabetes correctly gets "No matching records found."
+- Verified with 3-role comparison test: doctor sees full data, researcher
+  sees de-identified data, patient sees own data or empty result.
+- Key architectural point for interviews: "The LLM never sees data the
+  role can't access. Filtering happens before synthesis, not after. Even
+  if the LLM tried to leak patient names in the researcher view, it can't
+  — the names aren't in the data it receives."
+
+ ## Day 38 — Streamlit UI + shipping
+
+- 4-persona Streamlit app: Doctor (full chat + cohort + anomalies),
+  Researcher (de-identified), Admin (operational dashboard), Patient (own
+  record). Connects to FastAPI backend at localhost:8080.
+- Doctor view: chat interface with sidebar example queries, "Query details"
+  expander showing route, confidence, Cypher, and citations. Cohort builder
+  tab with demographics, conditions, medications, encounter summary tables.
+  Anomaly detection tab with warfarin (72 flagged) and HF readmission (155).
+- Researcher view: same three tabs but answers show hashed patient IDs
+  (P-xxxx) and no names. Cohort builder works with de-identified data.
+- Admin view: operational dashboard with metric cards (total patients,
+  encounters, providers, inpatient). No chat, no patient-level data.
+  Fixed answer filter to allow aggregate counts through while blocking
+  patient IDs.
+- Patient view: "My Health Record" with Conditions/Medications/Encounters
+  tabs scoped to own patient_id. Demo patient correctly shows "No matching
+  records found" for queries about conditions they don't have.
+- Anomaly detection switched from LLM-generated to pre-written Cypher.
+  The /anomalies/detect endpoint was timing out (>5 min for 4 LLM calls
+  on 14GB RAM). Direct Cypher executes in seconds. Fixed queries are
+  deterministic — no reason to run them through the LLM every time.
+- GOTCHA: Cypher has no BETWEEN keyword. LLM generated
+  "WHERE p.age_years_current BETWEEN 25 AND 40" which fails. Added
+  few-shot example #11 showing >= and <= pattern. Iterative prompt
+  engineering: each failure makes the system smarter.
+- Admin dashboard initially showed "?" for all metrics because
+  filter_answer_for_role blocked ALL answers for admin. Fixed: regex
+  check for patient IDs/names — block only if present, pass aggregate
+  counts through.
+
+## Week 5-6 close (Day 39) — Packaging & Ship
+
+- README rewritten from scratch. Leads with the 5 data quality findings
+  (DD-001 through DD-005), not the tech stack. Includes architecture
+  diagram, quickstart, RBAC access matrix, benchmark results, graph
+  statistics, and "What I'd Do Differently" section.
+- start.ps1 startup script launches all three services (Neo4j → API → UI)
+  in order with health checks. Anyone cloning the repo runs one command.
+- Resume bullets written from actual measured results: 682K graph nodes,
+  100% anomaly recall, 0 hallucinated citations, 28 edge cases with 0
+  crashes. No inflated metrics.
+- Repo cleanup: investigation scripts in scripts/, dbt target/logs/pycache
+  gitignored, junk files removed, requirements.txt complete.
+
+### Final project statistics
+- Build duration: 39 working days across 6 weeks
+- Data: 11,446 patients, 1.67M Bronze rows, 682K graph nodes, 2.5M relationships
+- Code: ~3,500 lines across parser, dbt models, graph ingestion, agent,
+  API, UI, tests
+- Tests: 107 dbt + 34 Python validation + 22 router + 8 agent + 28 edge case + 9 hybrid + 3 cohort + 2 anomaly benchmark
+- Design decisions: 7 documented (DD-001 through DD-007)
+- Technologies: Python, DuckDB, dbt, Neo4j, Chroma, LangChain, Ollama,
+  FastAPI, Streamlit, Docker
+
+### Interview through-line
+"I built a healthcare data platform that catches what most portfolio
+projects miss. Five documented Synthea limitations, a GraphRAG agent
+that refuses to answer when it's not confident, and RBAC that filters
+data before the AI sees it — not after. Every number in the README has
+a test behind it."
