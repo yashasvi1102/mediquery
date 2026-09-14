@@ -141,36 +141,7 @@ Two anomaly types with injected ground truth (30 warfarin + 25 HF):
 | Confidence scoring | 80-85/100 on valid queries, refuses below 40 |
 | Off-topic detection | Catches prompt injection, refuses gracefully |
 
-## Project Structure
 
-```
-mediquery/
-├── data_generation/           # Synthea parsing, anomaly injection
-│   ├── fhir_parser.py         # FHIR bundle → structured records
-│   ├── parse_all_bundles.py   # Batch parser (11,446 patients)
-│   └── anomaly_injector.py    # Ground truth anomaly injection
-├── data_engineering/
-│   ├── dbt/                   # Medallion architecture (Silver/Gold)
-│   ├── schema/                # Bronze + Gold SQL schemas
-│   ├── neo4j/                 # Graph ingestion + GraphRAG agent
-│   │   ├── graphrag_agent.py  # NL → Cypher → answer pipeline
-│   │   ├── cohort_builder.py  # NL cohort definition → stats
-│   │   ├── query_router.py    # Structured/semantic/hybrid routing
-│   │   ├── cypher_few_shots.py # Few-shot examples for LLM
-│   │   └── ingest_*.py        # Neo4j data loading scripts
-│   └── load_bronze.py         # Parquet → DuckDB Bronze loader
-├── app/                       # FastAPI RBAC application
-│   ├── main.py                # API endpoints
-│   ├── auth.py                # JWT token management
-│   └── rbac.py                # Role-based data filtering
-├── streamlit_app.py           # 4-persona UI
-├── tests/                     # Validation suites
-├── docs/                      # Design decisions, graph schema
-├── docker-compose.yml         # Neo4j service
-├── mediquery.duckdb           # Analytical warehouse (gitignored)
-├── LEARNINGS.md               # Day-by-day build log
-└── requirements.txt           # Python dependencies
-```
 
 ## Design Decisions
 
