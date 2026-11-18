@@ -29,7 +29,7 @@ DEMO_USERS = {
     "dr_smith":    {"role": "doctor"},
     "researcher1": {"role": "researcher"},
     "admin1":      {"role": "admin"},
-    "patient_demo": {"role": "patient", "patient_id": "ba519b64-a0be-f18f-3f34-2a07ea76d959"},
+        "patient_demo": {"role": "patient", "patient_id": "5764ecd4-4c5f-fc7c-a979-e3cb405b8f10"},
 }
 
 security = HTTPBearer()

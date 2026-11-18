@@ -240,7 +240,13 @@ def query_endpoint(req: QueryRequest, user: dict = Depends(get_current_user)):
         )
 
     # Step 4: FILTER results by role BEFORE synthesis
-    filtered_records = filter_for_role(records, role, patient_id)
+     # Step 4: FILTER results by role BEFORE synthesis
+    # Patient queries are already scoped at Cypher level (WHERE p.patient_id = ...)
+    # so row-level filtering is redundant and breaks when results lack patient_id column
+    if role == "patient":
+        filtered_records = records
+    else:
+        filtered_records = filter_for_role(records, role, patient_id)
 
     # Step 5: Synthesize answer from FILTERED results
     display_results = filtered_records[:25]
@@ -362,7 +368,95 @@ def detect_anomalies(user: dict = Depends(require_role("doctor", "researcher")))
         }
 
     return {"anomalies": anomalies, "role_applied": user["role"]}
+# ---------------------------------------------------------------------------
+# Patient summary — pre-written Cypher, no LLM needed
+# ---------------------------------------------------------------------------
+@app.get("/patient/summary")
+def patient_summary(user: dict = Depends(require_role("patient"))):
+    """Get patient's conditions, medications, and encounters with direct Cypher."""
+    pid = user.get("patient_id")
+    if not pid:
+        raise HTTPException(status_code=400, detail="No patient_id in token.")
 
+    with agent.neo4j_driver.session() as session:
+        conditions = [dict(r) for r in session.run("""
+            MATCH (p:Patient {patient_id: $pid})-[:HAS_CONDITION]->(c:Condition)
+            RETURN c.display AS condition, c.clinical_category AS category,
+                   c.condition_flag AS flag
+            ORDER BY c.clinical_category, c.display
+        """, {"pid": pid})]
+
+        medications = [dict(r) for r in session.run("""
+            MATCH (p:Patient {patient_id: $pid})-[:HAS_ENCOUNTER]->(e:Encounter)-[:PRESCRIBED]->(m:Medication)
+            RETURN DISTINCT m.medication_display AS medication, m.drug_class AS drug_class,
+                   m.medication_flag AS flag
+            ORDER BY m.drug_class, m.medication_display
+        """, {"pid": pid})]
+
+        encounters = [dict(r) for r in session.run("""
+            MATCH (p:Patient {patient_id: $pid})-[:HAS_ENCOUNTER]->(e:Encounter)
+            RETURN e.encounter_type AS type, e.start_time AS date,
+                   e.duration_minutes AS duration, e.reason_display AS reason
+            ORDER BY e.start_time DESC
+            LIMIT 20
+        """, {"pid": pid})]
+
+        patient = [dict(r) for r in session.run("""
+            MATCH (p:Patient {patient_id: $pid})
+            RETURN p.given_name AS first_name, p.family_name AS last_name,
+                   p.gender AS gender, p.age_years_current AS age,
+                   p.race AS race, p.city AS city, p.state AS state
+        """, {"pid": pid})]
+
+    return {
+        "patient": patient[0] if patient else {},
+        "conditions": conditions,
+        "medications": medications,
+        "encounters": encounters,
+        "counts": {
+            "conditions": len(conditions),
+            "medications": len(medications),
+            "encounters": len(encounters),
+        }
+    }
+# ---------------------------------------------------------------------------
+# Fast stats — pre-written Cypher, no LLM, instant results
+# ---------------------------------------------------------------------------
+@app.get("/stats")
+def get_stats(user: dict = Depends(get_current_user)):
+    """Instant database statistics. No LLM involved."""
+    with agent.neo4j_driver.session() as session:
+        counts = dict(session.run("""
+            MATCH (p:Patient) WITH count(p) AS patients
+            MATCH (e:Encounter) WITH patients, count(e) AS encounters
+            MATCH (pr:Provider) WITH patients, encounters, count(pr) AS providers
+            MATCH (c:Condition) WITH patients, encounters, providers, count(c) AS conditions
+            MATCH (m:Medication)
+            RETURN patients, encounters, providers, conditions, count(m) AS medications
+        """).single())
+
+        inpatient = session.run(
+            "MATCH (e:Encounter {is_inpatient: true}) RETURN count(e) AS count"
+        ).single()["count"]
+
+        chronic = [dict(r) for r in session.run("""
+            MATCH (p:Patient)-[:HAS_CONDITION]->(c:Condition)
+            WHERE c.condition_flag IS NOT NULL
+            RETURN c.condition_flag AS condition, count(DISTINCT p) AS patients
+            ORDER BY patients DESC
+        """)]
+
+        encounter_types = [dict(r) for r in session.run("""
+            MATCH (e:Encounter)
+            RETURN e.encounter_type AS type, count(e) AS count
+            ORDER BY count DESC
+        """)]
+
+    return {
+        "counts": {**counts, "inpatient": inpatient},
+        "chronic_conditions": chronic,
+        "encounter_types": encounter_types,
+    }
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
